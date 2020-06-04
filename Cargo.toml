@@ -1,0 +1,31 @@
+[package]
+name = "parallel-stream"
+version = "0.1.0"
+authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
+edition = "2018"
+
+
+[dependencies]
+argparse = "0.2"
+log = "0.4"
+simplelog = "0.7"
+#tokio = "0.1"
+futures = "0.1"
+bytes = "0.4"
+libc = "0.2"
+
+[dependencies.tokio]
+version = "0.1"
+default-features = false
+#default features = ["codec", "fs", "io", "reactor", "rt-full", "sync", "tcp", "timer", "udp", "uds"]
+features = ["codec", "fs", "io", "rt-full", "sync"]
+
+#[profile.release]
+#lto= "fat"
+#opt-level = 3
+#codegen-units = 1
+#panic = "abort"
+
+#[profile.dev]
+#opt-level = 1
+#debug = 2
