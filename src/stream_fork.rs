@@ -7,18 +7,16 @@ pub struct ForkRR<S: Sink> {
     cursor: usize,
 }
 
-impl<S: Sink> ForkRR<S> {
-    pub fn new(sinks: Vec<S>) -> Self {
-        let mut pipelines = Vec::with_capacity(sinks.len());
-        for s in sinks {
-            pipelines.push(Some(s));
-        }
-        assert!(!pipelines.is_empty());
+pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
+    let mut pipelines = Vec::with_capacity(sinks.len());
+    for s in sinks {
+        pipelines.push(Some(s));
+    }
+    assert!(!pipelines.is_empty());
 
-        ForkRR {
-            pipelines,
-            cursor: 0,
-        }
+    ForkRR {
+        pipelines,
+        cursor: 0,
     }
 }
 
@@ -35,7 +33,7 @@ S: Send,
             sinks.push(tx);
             streams.push(rx);
         }
-        let fork = ForkRR::new(sinks);
+        let fork = fork_rr(sinks);
 
         let fork_task = stream
             .forward(fork.sink_map_err(|e| {

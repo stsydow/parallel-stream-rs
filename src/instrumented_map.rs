@@ -16,7 +16,7 @@ pub struct InstrumentedMap<S, F>
     function: F
 }
 
-pub fn new<S, F, U>(stream: S, function: F, name: String) -> InstrumentedMap<S, F>
+pub fn instrumented_map<S, F, U>(stream: S, function: F, name: String) -> InstrumentedMap<S, F>
     where S: Stream,
           F: FnMut(S::Item) -> U,
 {
@@ -76,7 +76,7 @@ pub struct InstrumentedMapChunked<S, F>
     function: F
 }
 
-pub fn new_chunked<S, I, F, U>(stream: S, function: F, name: String) -> InstrumentedMapChunked<S, F>
+pub fn instrumented_map_chunked<S, I, F, U>(stream: S, function: F, name: String) -> InstrumentedMapChunked<S, F>
     where S: Stream<Item=Vec<I>>,
           F: FnMut(I) -> U,
 {

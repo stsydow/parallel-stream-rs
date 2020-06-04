@@ -27,7 +27,7 @@ enum State<T, F> where F: Future {
     Processing((Instant, F)),
 }
 
-pub fn new<S, F, Fut, T>(s: S, f: F, t: T, name: String) -> InstrumentedFold<S, F, Fut, T>
+pub fn instrumented_fold<S, F, Fut, T>(s: S, f: F, t: T, name: String) -> InstrumentedFold<S, F, Fut, T>
     where S: Stream,
           F: FnMut(T, S::Item) -> Fut,
           Fut: IntoFuture<Item = T>,
