@@ -1,4 +1,4 @@
-//use std::time::Instant;
+use std::time::Instant;
 use bytes::Bytes;
 
 use tokio::prelude::*;
@@ -71,7 +71,7 @@ fn sync_fn_1k(b: &mut Bencher) {
     });
 }
 
-#[inline(never)]
+//#[inline(never)]
 fn dummy_stream() -> impl Stream<Item=Bytes, Error=()> {
     stream::unfold(0, |count| {
         if count <= BLOCK_COUNT {
@@ -251,10 +251,138 @@ fn fork_join_1k(b: &mut Bencher) {
     });
 }
 
+#[bench]
+fn wait_task(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
 
-/*
-#[test]
-fn another() {
-    panic!("Make this test fail");
+    b.iter(|| {
+
+        let task = future::lazy(|| future::ok::<(), std::io::Error>(()) );
+
+        //runtime.spawn(task);
+
+        runtime.block_on(task).expect("error in main task");
+    });
 }
-*/
+
+#[bench]
+fn spawn_1(b: &mut Bencher) {
+
+    b.iter(|| {
+        let mut runtime = Runtime::new().expect("can not start runtime");
+        let task = future::lazy(|| future::ok::<(), ()>(()));
+        runtime.block_on_all(task).expect("error in main task");
+    });
+}
+
+#[bench]
+fn spawn_1k(b: &mut Bencher) {
+
+    b.iter(|| {
+        let mut runtime = Runtime::new().expect("can not start runtime");
+
+        for _i in 0 .. BLOCK_SIZE -1 {
+            let task = future::lazy(|| future::ok::<(), ()>(()) );
+
+            runtime.spawn(task);
+        }
+
+        let task = future::lazy(|| future::ok::<(), ()>(()));
+        runtime.block_on_all(task).expect("error in main task");
+    });
+}
+
+
+fn time_stream() -> impl Stream<Item=Instant, Error=()> {
+    stream::unfold(0, |count| {
+        if count <= BLOCK_COUNT {
+            let count = count + 1;
+            let t = Instant::now();
+            let fut = future::ok::<_, ()>((t, count));
+            Some(fut)
+        } else {
+            None
+        }
+    })
+}
+
+#[bench]
+fn channel_latency(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    for i in 0 .. 5 {
+        let (tx, rx) = channel::<Instant>(1);
+
+        let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
+
+        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
+            .map( |_tx| () )
+            .map_err(|_e| ());
+
+
+        runtime.spawn(src_task);
+
+        let recv_task = rx.fold((0u128, 0usize),
+        |(sum, len), t| {
+            let dt = t.elapsed().as_nanos();
+            future::ok((sum + dt, len +1))
+        })
+        .map(|(sum, len)| {
+            let avg_latency = sum as f64 / len as f64;
+            eprintln!("~latency:{:0.1}ns", avg_latency)
+        })
+        .map_err(|_e| ());
+
+
+        runtime.block_on(recv_task).expect("error in main task");
+    };
+}
+
+#[bench]
+fn channel_buf2_latency(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    for i in 0 .. 5 {
+        let (tx, rx) = channel::<Instant>(2);
+
+        let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
+
+        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
+            .map( |_tx| () )
+            .map_err(|_e| ());
+
+
+        runtime.spawn(src_task);
+
+        let recv_task = rx.fold((0u128, 0usize),
+        |(sum, len), t| {
+            let dt = t.elapsed().as_nanos();
+            future::ok((sum + dt, len +1))
+        })
+        .map(|(sum, len)| {
+            let avg_latency = sum as f64 / len as f64;
+            eprintln!("~latency:{:0.1}ns", avg_latency)
+        })
+        .map_err(|_e| ());
+
+
+        runtime.block_on(recv_task).expect("error in main task");
+    }
+}
+
+#[bench]
+fn async_stream_latency(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    for i in 0 .. 5 {
+        let task = time_stream().fold((0u128, 0usize),
+        |(sum, len), t| {
+            let dt = t.elapsed().as_nanos();
+            future::ok((sum + dt, len +1))
+        })
+        .map(|(sum, len)| {
+            let avg_latency = sum as f64 / len as f64;
+            eprintln!("~latency:{:0.1}ns", avg_latency)
+        })
+        .map_err(|_e| ());
+
+        runtime.block_on(task).expect("error in main task");
+    }
+}
