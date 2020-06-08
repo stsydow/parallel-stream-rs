@@ -6,58 +6,34 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::channel;
 
 use test::Bencher;
-//use test::black_box;
-
-use libc::{c_long, rusage, suseconds_t, timeval, time_t, getrusage, RUSAGE_SELF};
+use test::black_box;
 
 use crate::stream_fork::fork_rr;
-use crate::stream_join::Join;
-
-pub fn get_cputime_usecs() -> (u64, u64) {
-    let mut usage = rusage {
-        ru_utime: timeval{ tv_sec: 0 as time_t, tv_usec: 0 as suseconds_t, },
-        ru_stime: timeval{ tv_sec: 0 as time_t, tv_usec: 0 as suseconds_t, },
-        ru_maxrss: 0 as c_long,
-        ru_ixrss: 0 as c_long,
-        ru_idrss: 0 as c_long,
-        ru_isrss: 0 as c_long,
-        ru_minflt: 0 as c_long,
-        ru_majflt: 0 as c_long,
-        ru_nswap: 0 as c_long,
-        ru_inblock: 0 as c_long,
-        ru_oublock: 0 as c_long,
-        ru_msgsnd: 0 as c_long,
-        ru_msgrcv: 0 as c_long,
-        ru_nsignals: 0 as c_long,
-        ru_nvcsw: 0 as c_long,
-        ru_nivcsw: 0 as c_long,
-    };
-
-    unsafe { getrusage(RUSAGE_SELF, (&mut usage) as *mut rusage); }
-
-    let u_secs = usage.ru_utime.tv_sec as u64;
-    let u_usecs = usage.ru_utime.tv_usec as u64;
-    let s_secs = usage.ru_stime.tv_sec as u64;
-    let s_usecs = usage.ru_stime.tv_usec as u64;
-
-    let u_time = (u_secs * 1_000_000) + u_usecs;
-    let s_time = (s_secs * 1_000_000) + s_usecs;
-
-    (u_time, s_time)
-}
 
 const BLOCK_COUNT:usize = 1_000;
+
+/*
 const BLOCK_SIZE:usize = 1<<12; //4k
 static PAYLOAD:[u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
-
+type Message = Bytes;
+fn new_message() -> Message {
+    Bytes::from_static(&PAYLOAD)
+}
+*/
+type Message = u32;
+fn new_message() -> Message {
+    1u32
+}
+fn test_msg(m:Message) {
+    black_box(m);
+    //let n = m + 2;
+    //if m > 0 { () }
+}
 
 #[inline(never)]
-fn touch(b: Bytes) {
+fn touch(b: Message) {
+    test_msg(b);
     //black_box(b)
-
-    if b[0] > 0 {
-        panic!("unexpected value")
-    }
     //drop(b);
 }
 
@@ -65,18 +41,42 @@ fn touch(b: Bytes) {
 fn sync_fn_1k(b: &mut Bencher) {
     b.iter(|| {
         for _i in 0.. BLOCK_COUNT {
-            let buffer = Bytes::from_static(&PAYLOAD);
+            let buffer = new_message();
             touch(buffer)
         }
     });
 }
 
+fn dummy_iter() -> impl Iterator<Item=Message> {
+    let mut count = 0;
+    let byte_stream = std::iter::from_fn(move || {
+        count += 1;
+        if count < BLOCK_COUNT {
+            let buffer = new_message();
+            Some(buffer)
+        } else {
+            None
+        }
+    });
+    byte_stream
+}
+
+#[bench]
+fn iter_stream_1k(b: &mut Bencher) {
+    b.iter(|| {
+        dummy_iter()
+            .for_each(|item| {
+                test_msg(item)
+            });
+    });
+}
+
 //#[inline(never)]
-fn dummy_stream() -> impl Stream<Item=Bytes, Error=()> {
+fn dummy_stream() -> impl Stream<Item=Message, Error=()> {
     stream::unfold(0, |count| {
         if count <= BLOCK_COUNT {
             let count = count + 1;
-            let buffer = Bytes::from_static(&PAYLOAD);
+            let buffer = new_message();
             let fut = future::ok::<_, ()>((buffer, count));
             Some(fut)
         } else {
@@ -90,8 +90,8 @@ fn async_stream_1k(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         let task = dummy_stream()
-            .for_each(|_item| {
-                //touch(item);
+            .for_each(|item| {
+                test_msg(item);
                 Ok(())
             });
         runtime.block_on(task).expect("error in main task");
@@ -115,7 +115,8 @@ fn async_stream_map10_1k(b: &mut Bencher) {
         .map(|i| i)
         .map(|i| i)
 
-        .for_each(|_item| {
+        .for_each(|item| {
+            test_msg(item);
             Ok(())
         });
         runtime.block_on(task).expect("error in main task");
@@ -126,7 +127,7 @@ fn async_stream_map10_1k(b: &mut Bencher) {
 fn channel_1k(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-        let (tx, rx) = channel::<Bytes>(1);
+        let (tx, rx) = channel::<Message>(1);
 
         let forward = dummy_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
 
@@ -138,7 +139,8 @@ fn channel_1k(b: &mut Bencher) {
         runtime.spawn(src_task);
 
         let recv_task = rx
-            .for_each(|_item| {
+            .for_each(|item| {
+                test_msg(item);
                 Ok(())
             })
         .map_err(|_e| ());
@@ -152,7 +154,7 @@ fn channel_1k(b: &mut Bencher) {
 fn channel_buf2_1k(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-        let (tx, rx) = channel::<Bytes>(2);
+        let (tx, rx) = channel::<Message>(2);
 
         let forward = dummy_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
 
@@ -164,7 +166,8 @@ fn channel_buf2_1k(b: &mut Bencher) {
         runtime.spawn(src_task);
 
         let recv_task = rx
-            .for_each(|_item| {
+            .for_each(|item| {
+                test_msg(item);
                 Ok(())
             })
         .map_err(|_e| ());
@@ -178,7 +181,7 @@ fn channel_buf2_1k(b: &mut Bencher) {
 fn channel_buf2_chunk10_1k(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-        let (tx, rx) = channel::<Vec<Bytes>>(2);
+        let (tx, rx) = channel::<Vec<Message>>(2);
 
         let forward = dummy_stream().chunks(10).forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
 
@@ -192,9 +195,7 @@ fn channel_buf2_chunk10_1k(b: &mut Bencher) {
         let recv_task = rx
             .for_each(|chunk| {
                 for item in chunk {
-                    if item.len() == 0 {
-                        panic!("expected a full buffer");
-                    }
+                    test_msg(item)
                 }
                 Ok(())
             })
@@ -213,9 +214,9 @@ fn fork_join_1k(b: &mut Bencher) {
     let (fork, join) = {
         let mut senders = Vec::new();
         //let mut join = Join::new();
-        let (out_tx, out_rx) = channel::<Bytes>(pipe_threads+1);
+        let (out_tx, out_rx) = channel::<Message>(pipe_threads+1);
         for _i in 0..pipe_threads {
-            let (in_tx, in_rx) = channel::<Bytes>(2);
+            let (in_tx, in_rx) = channel::<Message>(2);
 
             senders.push(in_tx);
             let forward = in_rx.forward(out_tx.clone().sink_map_err(|e| panic!("forward send error: {}", e)));
@@ -269,7 +270,7 @@ fn wait_task(b: &mut Bencher) {
 fn spawn_1(b: &mut Bencher) {
 
     b.iter(|| {
-        let mut runtime = Runtime::new().expect("can not start runtime");
+        let runtime = Runtime::new().expect("can not start runtime");
         let task = future::lazy(|| future::ok::<(), ()>(()));
         runtime.block_on_all(task).expect("error in main task");
     });
@@ -307,9 +308,9 @@ fn time_stream() -> impl Stream<Item=Instant, Error=()> {
 }
 
 #[bench]
-fn channel_latency(b: &mut Bencher) {
+fn channel_latency(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
-    for i in 0 .. 5 {
+    for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(1);
 
         let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
@@ -338,9 +339,9 @@ fn channel_latency(b: &mut Bencher) {
 }
 
 #[bench]
-fn channel_buf2_latency(b: &mut Bencher) {
+fn channel_buf2_latency(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
-    for i in 0 .. 5 {
+    for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(2);
 
         let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
@@ -369,9 +370,9 @@ fn channel_buf2_latency(b: &mut Bencher) {
 }
 
 #[bench]
-fn async_stream_latency(b: &mut Bencher) {
+fn async_stream_latency(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
-    for i in 0 .. 5 {
+    for _i in 0 .. 5 {
         let task = time_stream().fold((0u128, 0usize),
         |(sum, len), t| {
             let dt = t.elapsed().as_nanos();
@@ -385,4 +386,14 @@ fn async_stream_latency(b: &mut Bencher) {
 
         runtime.block_on(task).expect("error in main task");
     }
+}
+
+#[bench]
+fn measure_time(b: &mut Bencher) {
+    b.iter( || {
+        let t = Instant::now();
+        //let dt = t.elapsed()//.as_nanos();
+        //dt
+        t
+    });
 }
