@@ -9,6 +9,7 @@ use test::Bencher;
 use test::black_box;
 
 use crate::stream_fork::fork_rr;
+use crate::{StreamExt, Tag};
 
 const BLOCK_COUNT:usize = 1_000;
 
@@ -214,9 +215,9 @@ fn fork_join_1k(b: &mut Bencher) {
     let (fork, join) = {
         let mut senders = Vec::new();
         //let mut join = Join::new();
-        let (out_tx, out_rx) = channel::<Message>(pipe_threads+1);
+        let (out_tx, out_rx) = channel::<Tag<Message>>(pipe_threads+1);
         for _i in 0..pipe_threads {
-            let (in_tx, in_rx) = channel::<Message>(2);
+            let (in_tx, in_rx) = channel::<Tag<Message>>(2);
 
             senders.push(in_tx);
             let forward = in_rx.forward(out_tx.clone().sink_map_err(|e| panic!("forward send error: {}", e)));
@@ -253,6 +254,31 @@ fn fork_join_1k(b: &mut Bencher) {
 }
 
 #[bench]
+fn fork_join_tagged_1k(b: &mut Bencher) {
+    //let mut runtime = Runtime::new().expect("can not start runtime");
+    const pipe_threads:usize = 2;
+    b.iter(|| {
+        tokio::run(futures::lazy(|| {
+            let pipeline = dummy_stream().fork(pipe_threads).decouple(2).join();
+
+            let pipeline_task = pipeline.for_each(|_item| {
+                Ok(())
+            }).map_err(|_e| ());
+            pipeline_task
+        }));
+        /*
+           let pipeline = dummy_stream().fork(2).join();
+
+           let pipeline_task = pipeline.for_each(|_item| {
+           Ok(())
+           }).map_err(|_e| ());
+        //runtime.block_on(pipeline_task).expect("error in main task");
+        */
+    });
+}
+
+
+#[bench]
 fn wait_task(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
 
@@ -282,7 +308,7 @@ fn spawn_1k(b: &mut Bencher) {
     b.iter(|| {
         let mut runtime = Runtime::new().expect("can not start runtime");
 
-        for _i in 0 .. BLOCK_SIZE -1 {
+        for _i in 0 .. BLOCK_COUNT -1 {
             let task = future::lazy(|| future::ok::<(), ()>(()) );
 
             runtime.spawn(task);

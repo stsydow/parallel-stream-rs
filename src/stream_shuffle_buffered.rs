@@ -40,7 +40,7 @@ where
 
         ShuffleBufferedInput {
             selector: self.selector,
-            pipelines: self.pipelines.clone(),
+            pipelines: self.pipelines.clone(), // TODO JoinOrder here?
             buffers,
         }
     }

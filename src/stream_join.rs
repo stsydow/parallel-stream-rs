@@ -2,6 +2,88 @@ use futures::{try_ready, Async, Poll, Stream};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
+use crate::{Tag, ParallelStream};
+
+struct TaggedQueueItem<I> {
+    event: Option<Tag<I>>,
+    source_id: usize,
+}
+
+impl<I> Ord for TaggedQueueItem<I> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.event.cmp(&other.event).reverse()
+    }
+}
+
+impl<I> PartialOrd for TaggedQueueItem<I> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<I> PartialEq for TaggedQueueItem<I> {
+    fn eq(&self, other: &Self) -> bool {
+        self.event == other.event
+    }
+}
+
+impl<I> Eq for TaggedQueueItem<I> {}
+
+pub struct JoinTagged<S, I>
+where
+    S: Stream<Item=Tag<I>>,
+{
+    pipelines: Vec<S>,
+    last_values: BinaryHeap<TaggedQueueItem<I>>,
+}
+
+pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S, I>
+where S: Stream<Item=Tag<I>>
+{
+    let mut queue = BinaryHeap::new();
+    for i in 0 .. par_stream.streams.len() {
+        queue.push(TaggedQueueItem{event: None, source_id: i});
+    }
+    JoinTagged {
+        pipelines: par_stream.streams,
+        last_values: queue,
+    }
+}
+
+
+impl<S, I> Stream for JoinTagged<S, I>
+where
+    S: Stream<Item=Tag<I>>,
+{
+    type Item = I;
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self.last_values.peek() {
+            Some(item) => {
+                let index = item.source_id;
+                let async_event = try_ready!(self.pipelines[index].poll()); //leave on error
+                let item = self.last_values.pop().unwrap(); //peek went ok already
+                match async_event {
+                    Some(new_event) => {
+                        let tagged_item = TaggedQueueItem{event: Some(new_event), source_id: item.source_id};
+                        self.last_values.push(tagged_item);
+                    },
+                    None => (), // stream is done - don't queue it again.
+                };
+
+                match item.event {
+                    Some(event) => Ok(Async::Ready(Some(event.untag()))),
+                    None => self.poll(),
+                }
+            }
+            None => {
+                Ok(Async::Ready(None))
+            },
+        }
+    }
+}
+
 struct QueueItem<Event> {
     event: Option<Event>,
     order: u64,
@@ -10,13 +92,13 @@ struct QueueItem<Event> {
 
 impl<Event> Ord for QueueItem<Event> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.order.cmp(&other.order)
+        self.order.cmp(&other.order).reverse()
     }
 }
 
 impl<Event> PartialOrd for QueueItem<Event> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.order.partial_cmp(&other.order)
+        Some(self.cmp(other))
     }
 }
 

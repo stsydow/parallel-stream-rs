@@ -3,6 +3,7 @@ use crate::instrumented_fold::{self, InstrumentedFold};
 use crate::selective_context::{self, SelectiveContext, SelectiveContextBuffered};
 use crate::probe_stream;
 use crate::stream_fork;
+use crate::{Tag, ParallelStream};
 use tokio::prelude::*;
 
 use std::hash::Hash;
@@ -74,9 +75,8 @@ pub trait StreamExt: Stream {
         selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
-    fn fork(self, degree: usize) -> Vec<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork(self, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Tag<Self::Item>>>
         where
-            Self::Error: std::fmt::Display,
             Self::Item: Send,
             Self: Sized + Send + 'static,
     {
@@ -85,7 +85,6 @@ pub trait StreamExt: Stream {
 
     fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> Vec<tokio::sync::mpsc::Receiver<Self::Item>>
         where
-            Self::Error: std::fmt::Display,
             Self::Item: Send,
             FSel: Fn(&Self::Item) -> usize,
             Self: Sized + Send + 'static,
