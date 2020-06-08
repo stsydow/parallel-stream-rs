@@ -117,6 +117,35 @@ where
     }
 }
 
+impl<S: Stream> ParallelStream<S>
+{
+    fn instrumented_map_chunked<I, U, F>(self, f: F, name:String)
+        -> ParallelStream<instrumented_map::InstrumentedMapChunked<S, F>>
+        where S:Stream<Item=Vec<I>>,
+              F: FnMut(I) -> U + Copy,
+    {
+        let mut streams = Vec::new();
+        for input in self.streams {
+            let map = input.instrumented_map_chunked(f, name.clone());
+            streams.push(map);
+        }
+        ParallelStream{ streams }
+    }
+
+    fn instrumented_map<I, U, F>(self, f: F, name:String)
+        -> ParallelStream<instrumented_map::InstrumentedMap<S, F>>
+        where S:Stream<Item=I>,
+              F: FnMut(I) -> U + Copy,
+    {
+        let mut streams = Vec::new();
+        for input in self.streams {
+            let map = input.instrumented_map(f, name.clone());
+            streams.push(map);
+        }
+        ParallelStream{ streams }
+    }
+}
+
 
 impl<T: ?Sized, I> TimedStream<I> for T where T: Stream<Item=(Instant, I)> {}
 
