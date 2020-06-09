@@ -83,14 +83,13 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream(self, degree)
     }
 
-    fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> Vec<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Tag<Self::Item>>>
         where
             Self::Item: Send,
-            FSel: Fn(&Self::Item) -> usize,
+            FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
             Self: Sized + Send + 'static,
     {
-        unimplemented!();
-        //stream_fork::fork_stream_sel(self, selector, degree)
+        stream_fork::fork_stream_sel(self, selector, degree)
     }
 
 

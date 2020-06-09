@@ -1,10 +1,16 @@
 use futures::{try_ready, Async, Poll, Sink, StartSend};
 
+pub struct Chunk<Item> {
+    seq_no: usize,
+    items: Vec<Item>
+}
+
 pub struct ChunkedFork<S: Sink, FSel, Item> {
     selector: FSel,
     pipelines: Vec<Option<S>>,
-    buffers: Vec<Vec<Item>>,
+    buffers: Vec<Chunk<Item>>,
     capacity: usize,
+    seq_no: usize,
 }
 
 impl<S: Sink<SinkItem=Vec<Item>>, FSel, Item> ChunkedFork<S, FSel, Item>
@@ -25,6 +31,7 @@ impl<S: Sink<SinkItem=Vec<Item>>, FSel, Item> ChunkedFork<S, FSel, Item>
             pipelines,
             buffers,
             capacity,
+            seq_no: 0,
         }
     }
 
@@ -36,7 +43,7 @@ impl<S: Sink<SinkItem=Vec<Item>>, FSel, Item> ChunkedFork<S, FSel, Item>
 }
 
 
-impl<S: Sink<SinkItem=Vec<Item>>, FSel> Sink for ChunkedFork<S, FSel, Item>
+impl<Item, S: Sink<SinkItem=Vec<Item>>, FSel> Sink for ChunkedFork<S, FSel, Item>
 where
     FSel: Fn(&Item) -> usize,
 {
@@ -45,13 +52,17 @@ where
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
         let index = (self.selector)(&item) % self.pipelines.len();
+        let chunk_seq_no = self.seq_no + 1;
+        self.seq_no = chunk_seq_no;
         if let Some(sink) = &mut self.pipelines[index] {
             let buffer = &mut self.buffers[index];
             if buffer.len() >= self.capacity {
                 self.buffers.push(Vec::with_capacity(self.capacity));
                 let buf = self.buffers.swap_remove(index);
-                TODO
-                sink.start_send(buf)
+                sink.start_send(Chunk{
+                    items: buf,
+                    seq_no: chunk_seq_no,
+                })
             } else {
                 buffer.push(item)
             }

@@ -12,11 +12,11 @@ extern crate test;
 pub mod global_context;
 mod stream_fork;
 //mod stream_fork_chunked;
-pub use crate::stream_fork::{ForkRR, Fork, fork_rr};
+pub use crate::stream_fork::{ForkRR, ForkSel};
 mod stream_join;
 pub use crate::stream_join::{JoinTagged, Join};
-pub mod stream_shuffle;
-pub mod stream_shuffle_buffered;
+//broken pub mod stream_shuffle;
+//broken pub mod stream_shuffle_buffered;
 //pub mod parallel_pipeline;
 pub mod selective_context;
 pub mod probe_stream;
@@ -29,6 +29,7 @@ mod stream_ext;
 pub use crate::stream_ext::StreamExt;
 
 use std::cmp::Ordering;
+use std::hash::Hash;
 use std::time::{ Instant };
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
@@ -86,6 +87,58 @@ where
     pub fn join(self) -> JoinTagged<S, I> {
         stream_join::join_tagged(self)
     }
+
+    /*
+    fn selective_context_buffered<Event, R, Key, Ctx, CtxInit, FSel, FWork>(
+        self,
+        ctx_builder: CtxInit,
+        selector: FSel,
+        work: FWork,
+        name: String
+    ) -> selective_context::SelectiveContextBuffered<Key, Ctx, Self, CtxInit, FSel, FWork>
+    where
+        //Ctx:Context<Event=Event, Result=R>,
+        Key: Ord + Hash,
+        CtxInit: Fn(&Key) -> Ctx,
+        FSel: Fn(&Event) -> Key,
+        FWork: Fn(&mut Ctx, &Event) -> R,
+        Self: Sized + Stream<Item=Tag<Vec<Event>>>,
+    {
+        selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
+    }
+    */
+
+    pub fn shuffle<FSel>(self, selector: FSel, degree: usize) ->
+        ParallelStream<impl Stream<Item=Tag<I>>>
+    where
+        I:Send,
+        S: Send + 'static,
+        FSel: Fn(&I) -> usize + Copy + Send + 'static,
+    {
+        let input_degree = self.streams.len();
+        let mut joins_streams = Vec::with_capacity(degree);
+        for _i in 0 .. degree {
+            joins_streams.push( Vec::with_capacity(input_degree))
+        }
+
+        for input in self.streams {
+            let splits = input.fork_sel( move |t| (selector)(&t.data), degree);
+
+
+            let mut i = 0;
+            for s in splits.streams {
+                joins_streams[i].push(s);
+                i += 1;
+            }
+        }
+
+        let mut joins = Vec::with_capacity(degree);
+        for streams in joins_streams {
+            joins.push(ParallelStream{streams}.join())
+        }
+
+        ParallelStream{ streams:joins }
+    }
 }
 
 impl<S, I> ParallelStream<S>
@@ -117,7 +170,7 @@ where
     }
 }
 
-impl<S: Stream> ParallelStream<S>
+impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged version
 {
     fn instrumented_map_chunked<I, U, F>(self, f: F, name:String)
         -> ParallelStream<instrumented_map::InstrumentedMapChunked<S, F>>
@@ -140,6 +193,31 @@ impl<S: Stream> ParallelStream<S>
         let mut streams = Vec::new();
         for input in self.streams {
             let map = input.instrumented_map(f, name.clone());
+            streams.push(map);
+        }
+        ParallelStream{ streams }
+    }
+
+    // TODO only useful after shuffle
+    fn selective_context_buffered<Event, R, Key, Ctx, CtxInit, FSel, FWork>(
+        self,
+        ctx_builder: CtxInit,
+        selector: FSel,
+        work: FWork,
+        name: String
+    ) -> ParallelStream<selective_context::SelectiveContextBuffered<Key, Ctx, S, CtxInit, FSel, FWork>>
+    where
+        //Ctx:Context<Event=Event, Result=R>,
+        Key: Ord + Hash,
+        CtxInit: Fn(&Key) -> Ctx + Copy,
+        FSel: Fn(&Event) -> Key + Copy,
+        FWork: Fn(&mut Ctx, &Event) -> R + Copy,
+        S: Sized + Stream<Item=Vec<Event>>,
+    {
+        let mut streams = Vec::new();
+        for input in self.streams {
+            let map = input.selective_context_buffered(ctx_builder, selector, work, name.clone());
+            //instrumented_map(f, name.clone());
             streams.push(map);
         }
         ParallelStream{ streams }

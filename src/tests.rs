@@ -21,9 +21,9 @@ fn new_message() -> Message {
     Bytes::from_static(&PAYLOAD)
 }
 */
-type Message = u32;
-fn new_message() -> Message {
-    1u32
+type Message = usize;
+fn new_message(val:usize) -> Message {
+    val
 }
 fn test_msg(m:Message) {
     black_box(m);
@@ -41,8 +41,8 @@ fn touch(b: Message) {
 #[bench]
 fn sync_fn_1k(b: &mut Bencher) {
     b.iter(|| {
-        for _i in 0.. BLOCK_COUNT {
-            let buffer = new_message();
+        for i in 0.. BLOCK_COUNT {
+            let buffer = new_message(i);
             touch(buffer)
         }
     });
@@ -51,9 +51,9 @@ fn sync_fn_1k(b: &mut Bencher) {
 fn dummy_iter() -> impl Iterator<Item=Message> {
     let mut count = 0;
     let byte_stream = std::iter::from_fn(move || {
-        count += 1;
         if count < BLOCK_COUNT {
-            let buffer = new_message();
+            let buffer = new_message(count);
+            count += 1;
             Some(buffer)
         } else {
             None
@@ -76,9 +76,8 @@ fn iter_stream_1k(b: &mut Bencher) {
 fn dummy_stream() -> impl Stream<Item=Message, Error=()> {
     stream::unfold(0, |count| {
         if count <= BLOCK_COUNT {
-            let count = count + 1;
-            let buffer = new_message();
-            let fut = future::ok::<_, ()>((buffer, count));
+            let buffer = new_message(count);
+            let fut = future::ok::<_, ()>((buffer, count + 1));
             Some(fut)
         } else {
             None
@@ -277,6 +276,35 @@ fn fork_join_tagged_1k(b: &mut Bencher) {
     });
 }
 
+#[bench]
+fn shuffle_1k(b: &mut Bencher) {
+    //let mut runtime = Runtime::new().expect("can not start runtime");
+    const pipe_threads:usize = 2;
+    b.iter(|| {
+        tokio::run(futures::lazy(|| {
+            let pipeline = dummy_stream().fork(pipe_threads)
+                .shuffle(|i|{*i}, pipe_threads).decouple(2).join();
+
+            let pipeline_task = pipeline.for_each(|_item| {
+                Ok(())
+            }).map_err(|_e| ()).map(|val| {
+                eprintln!("done");
+                val
+            }
+            );
+            eprintln!("submit");
+            pipeline_task
+        }));
+        /*
+           let pipeline = dummy_stream().fork(2).join();
+
+           let pipeline_task = pipeline.for_each(|_item| {
+           Ok(())
+           }).map_err(|_e| ());
+        //runtime.block_on(pipeline_task).expect("error in main task");
+        */
+    });
+}
 
 #[bench]
 fn wait_task(b: &mut Bencher) {

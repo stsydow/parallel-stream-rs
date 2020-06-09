@@ -4,6 +4,7 @@ use std::collections::BinaryHeap;
 
 use crate::{Tag, ParallelStream};
 
+/*
 struct TaggedQueueItem<I> {
     event: Option<Tag<I>>,
     source_id: usize,
@@ -29,24 +30,39 @@ impl<I> PartialEq for TaggedQueueItem<I> {
 
 impl<I> Eq for TaggedQueueItem<I> {}
 
+*/
+
 pub struct JoinTagged<S, I>
-where
-    S: Stream<Item=Tag<I>>,
+//where S: Stream<Item=Tag<I>>,
 {
     pipelines: Vec<S>,
-    last_values: BinaryHeap<TaggedQueueItem<I>>,
+    buffers: Vec<Vec<Tag<I>>>,
+    //last_values: BinaryHeap<TaggedQueueItem<I>>,
+    next_tag: usize,
+    next_pipe: usize
 }
 
 pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S, I>
 where S: Stream<Item=Tag<I>>
 {
+    /*
     let mut queue = BinaryHeap::new();
     for i in 0 .. par_stream.streams.len() {
         queue.push(TaggedQueueItem{event: None, source_id: i});
     }
+    */
+    let degree = par_stream.streams.len();
+    let mut buffers = Vec::with_capacity(degree);
+    for _i in 0 .. degree {
+        buffers.push(Vec::new());
+    }
+
     JoinTagged {
         pipelines: par_stream.streams,
-        last_values: queue,
+        //last_values: queue,
+        buffers,
+        next_tag: 0,
+        next_pipe: 0
     }
 }
 
@@ -59,28 +75,60 @@ where
     type Error = S::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.last_values.peek() {
-            Some(item) => {
-                let index = item.source_id;
-                let async_event = try_ready!(self.pipelines[index].poll()); //leave on error
-                let item = self.last_values.pop().unwrap(); //peek went ok already
-                match async_event {
-                    Some(new_event) => {
-                        let tagged_item = TaggedQueueItem{event: Some(new_event), source_id: item.source_id};
-                        self.last_values.push(tagged_item);
-                    },
-                    None => (), // stream is done - don't queue it again.
-                };
 
-                match item.event {
-                    Some(event) => Ok(Async::Ready(Some(event.untag()))),
-                    None => self.poll(),
+        assert!(!self.buffers.is_empty());
+        /*
+        if self.buffers.is_empty() {
+            return Ok(Async::Ready(None));
+        }*/
+
+        for b in &mut self.buffers {
+            if let Some(item) = b.first() {
+                if item.seq_nr == self.next_tag {
+                    let item = b.pop().unwrap();
+                    self.next_tag += 1;
+                    return Ok(Async::Ready(Some(item.untag())))
                 }
             }
-            None => {
-                Ok(Async::Ready(None))
-            },
         }
+
+        for _i in 0 .. self.pipelines.len() {
+            let pipe_idx = self.next_pipe;
+            let async_event = self.pipelines[self.next_pipe].poll()?;
+            match async_event {
+                Async::Ready(Some(item)) => {
+                    assert!(item.seq_nr >= self.next_tag);
+                    self.next_pipe = (pipe_idx +1) %self.pipelines.len();
+
+                    if item.seq_nr == self.next_tag {
+                        self.next_tag += 1;
+                        return Ok(Async::Ready(Some(item.untag())));
+                    } else {
+                        self.buffers[pipe_idx].push(item);
+                        continue;
+                    }
+                },
+                Async::Ready(None) => {
+                    self.pipelines.remove(self.next_pipe);
+                    self.buffers.remove(self.next_pipe);
+                    let size =  self.pipelines.len();
+                    if size == 0 {
+                        self.next_pipe = 0;
+                        return Ok(Async::Ready(None));
+                    } else {
+                        self.next_pipe = pipe_idx % size;
+                        eprintln!("close - poll() again");
+                        return self.poll();
+                    };
+                },
+                Async::NotReady => {
+                    self.next_pipe = (pipe_idx +1) %self.pipelines.len();
+                    continue;
+                }
+            }
+        };
+        eprintln!("ret not ready");
+        Ok(Async::NotReady)
     }
 }
 

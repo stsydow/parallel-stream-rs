@@ -1,15 +1,53 @@
 use futures::{try_ready, Async, Poll, Sink, StartSend};
+use tokio::prelude::*;
+use crate::{StreamExt, Tag, ParallelStream, JoinTagged};
 
+/*
 pub struct ShuffleInput<S: Sink, FSel> {
     selector: FSel,
     pipelines: Vec<Option<S>>,
 }
 
-pub struct Shuffle<S: Sink + Clone, FSel> {
+*/
+
+pub struct Shuffle<S, I, FSel>
+{
     selector: FSel,
-    pipelines: Vec<Option<S>>,
+    pipelines: ParallelStream<JoinTagged<S, I>>,
 }
 
+pub fn shuffle<S, I, FSel>(input: ParallelStream<S>, selector: FSel, degree: usize) ->
+    ParallelStream<impl Stream<Item=Tag<I>>>
+where
+    I:Send,
+    S: Stream<Item=Tag<I>> + Send + 'static,
+    FSel: Fn(&I) -> usize + Copy,
+{
+        let mut joins_streams = Vec::with_capacity(degree);
+        let input_degree = input.streams.len();
+        for i in 0 .. degree {
+            joins_streams.push( Vec::with_capacity(input_degree))
+        }
+
+        for input in input.streams {
+            let splits = input.fork_sel(|t| selector(&t.data), degree: usize);
+
+
+            let mut i = 0;
+            for s in splits.streams {
+                joins_streams[i].push(s);
+                i += 1;
+            }
+        }
+
+        let mut joins = Vec::with_capacity(degree);
+        for streams in joins_streams {
+            joins.push(ParallelStream{streams}.join())
+        }
+
+        ParallelStream{ streams:joins }
+}
+/*
 impl<S: Sink + Clone, FSel> Shuffle<S, FSel>
 where
     FSel: Fn(&S::SinkItem) -> usize + Copy,
@@ -41,6 +79,9 @@ where
     */
 }
 
+*/
+
+/*
 impl<S: Sink + Clone, FSel> Sink for ShuffleInput<S, FSel>
 where
     FSel: Fn(&S::SinkItem) -> usize + Copy,
@@ -78,4 +119,5 @@ where
         Ok(Async::Ready(()))
     }
 }
+*/
 
