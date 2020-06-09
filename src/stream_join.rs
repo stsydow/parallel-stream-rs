@@ -32,14 +32,22 @@ impl<I> Eq for TaggedQueueItem<I> {}
 
 */
 
+struct Input<S, I> {
+    stream: Option<S>,
+    buffer: Vec<Tag<I>>
+}
+
+impl<S,I> Input<S,I> {
+    fn is_closed(&self) -> bool {
+        self.stream.is_none() && self.buffer.is_empty()
+    }
+}
+
 pub struct JoinTagged<S, I>
 //where S: Stream<Item=Tag<I>>,
 {
-    pipelines: Vec<S>,
-    buffers: Vec<Vec<Tag<I>>>,
-    //last_values: BinaryHeap<TaggedQueueItem<I>>,
+    pipelines: Vec<Input<S, I>>,
     next_tag: usize,
-    next_pipe: usize
 }
 
 pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S, I>
@@ -52,17 +60,14 @@ where S: Stream<Item=Tag<I>>
     }
     */
     let degree = par_stream.streams.len();
-    let mut buffers = Vec::with_capacity(degree);
-    for _i in 0 .. degree {
-        buffers.push(Vec::new());
+    let mut pipelines = Vec::with_capacity(degree);
+    for stream in par_stream.streams {
+        pipelines.push( Input{ stream: Some(stream), buffer: Vec::new()});
     }
 
     JoinTagged {
-        pipelines: par_stream.streams,
-        //last_values: queue,
-        buffers,
+        pipelines,
         next_tag: 0,
-        next_pipe: 0
     }
 }
 
@@ -76,58 +81,53 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
 
-        assert!(!self.buffers.is_empty());
-        /*
-        if self.buffers.is_empty() {
-            return Ok(Async::Ready(None));
-        }*/
+        self.pipelines.retain(|p| ! p.is_closed());
 
-        for b in &mut self.buffers {
-            if let Some(item) = b.first() {
+        if self.pipelines.is_empty() {
+            return Ok(Async::Ready(None));
+        }
+
+        for i in 0 .. self.pipelines.len() {
+            let pipe = &mut self.pipelines[i];
+
+            if pipe.buffer.len() > 0 {
+                let item = pipe.buffer.first().unwrap();
                 if item.seq_nr == self.next_tag {
-                    let item = b.pop().unwrap();
+                    let item = pipe.buffer.pop().unwrap();
                     self.next_tag += 1;
                     return Ok(Async::Ready(Some(item.untag())))
                 }
-            }
-        }
-
-        for _i in 0 .. self.pipelines.len() {
-            let pipe_idx = self.next_pipe;
-            let async_event = self.pipelines[self.next_pipe].poll()?;
-            match async_event {
-                Async::Ready(Some(item)) => {
-                    assert!(item.seq_nr >= self.next_tag);
-                    self.next_pipe = (pipe_idx +1) %self.pipelines.len();
-
-                    if item.seq_nr == self.next_tag {
-                        self.next_tag += 1;
-                        return Ok(Async::Ready(Some(item.untag())));
-                    } else {
-                        self.buffers[pipe_idx].push(item);
-                        continue;
-                    }
-                },
-                Async::Ready(None) => {
-                    self.pipelines.remove(self.next_pipe);
-                    self.buffers.remove(self.next_pipe);
-                    let size =  self.pipelines.len();
-                    if size == 0 {
-                        self.next_pipe = 0;
-                        return Ok(Async::Ready(None));
-                    } else {
-                        self.next_pipe = pipe_idx % size;
-                        eprintln!("close - poll() again");
-                        return self.poll();
+                //continue;
+            } else {
+                if let Some(stream) = &mut pipe.stream {
+                    match stream.poll()? {
+                        Async::Ready(Some(item)) => {
+                            assert!(item.seq_nr >= self.next_tag);
+                            if item.seq_nr == self.next_tag {
+                                self.next_tag += 1;
+                                return Ok(Async::Ready(Some(item.untag())));
+                            } else {
+                                pipe.buffer.push(item);
+                                //continue;
+                            }
+                        },
+                        Async::Ready(None) => {
+                            pipe.stream = None;
+                            return self.poll();
+                        },
+                        Async::NotReady => {
+                            //continue;
+                        }
                     };
-                },
-                Async::NotReady => {
-                    self.next_pipe = (pipe_idx +1) %self.pipelines.len();
-                    continue;
-                }
-            }
+                };
+            };
         };
-        eprintln!("ret not ready");
+        /*
+        eprintln!("ret not ready size{}", self.pipelines.len());
+        for pipe in &mut self.pipelines {
+            eprintln!("closed {} buf {}", pipe.stream.is_none(), pipe.buffer.len());
+        }
+        */
         Ok(Async::NotReady)
     }
 }

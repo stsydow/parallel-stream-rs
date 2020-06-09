@@ -283,16 +283,21 @@ fn shuffle_1k(b: &mut Bencher) {
     b.iter(|| {
         tokio::run(futures::lazy(|| {
             let pipeline = dummy_stream().fork(pipe_threads)
-                .shuffle(|i|{*i}, pipe_threads).decouple(2).join();
+                .shuffle(|i|{i * 7}, pipe_threads).decouple(2).join();
 
-            let pipeline_task = pipeline.for_each(|_item| {
+            let pipeline_task = pipeline
+            /*
+                .fold(0usize, |seq, item| {
+                    assert_eq!(seq, item);
+                    futures::future::ok(seq +1)
+                })
+            */
+            .for_each(|_item| {
                 Ok(())
-            }).map_err(|_e| ()).map(|val| {
-                eprintln!("done");
-                val
-            }
-            );
-            eprintln!("submit");
+            })
+            .map_err(|_e| ())
+            .map(|_val|{()});
+            //eprintln!("submit");
             pipeline_task
         }));
         /*
