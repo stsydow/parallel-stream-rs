@@ -32,25 +32,25 @@ impl<I> Eq for TaggedQueueItem<I> {}
 
 */
 
-struct Input<S, I> {
+struct Input<S:Stream> {
     stream: Option<S>,
-    buffer: Vec<Tag<I>>
+    buffer: Vec<S::Item> // Tag<_>
 }
 
-impl<S,I> Input<S,I> {
+impl<S> Input<S> {
     fn is_closed(&self) -> bool {
         self.stream.is_none() && self.buffer.is_empty()
     }
 }
 
-pub struct JoinTagged<S, I>
+pub struct JoinTagged<S>
 //where S: Stream<Item=Tag<I>>,
 {
-    pipelines: Vec<Input<S, I>>,
+    pipelines: Vec<Input<S>>,
     next_tag: usize,
 }
 
-pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S, I>
+pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S>
 where S: Stream<Item=Tag<I>>
 {
     /*
@@ -73,7 +73,7 @@ where S: Stream<Item=Tag<I>>
 }
 
 
-impl<S, I> Stream for JoinTagged<S, I>
+impl<S, I> Stream for JoinTagged<S>
 where
     S: Stream<Item=Tag<I>>,
 {

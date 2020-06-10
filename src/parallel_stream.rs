@@ -99,7 +99,7 @@ where
     }
 
 
-    pub fn untag(self) -> ParallelStream<impl Stream<Item=I>> {
+    pub fn untag(self) -> ParallelStream<impl Stream<Item=I, Error=S::Error>> {
         let mut streams = Vec::new();
         for input in self.streams {
             let map = input.map(|t| t.untag());
@@ -131,7 +131,9 @@ where
     */
 
     pub fn shuffle<FSel>(self, selector: FSel, degree: usize) ->
-        ParallelStream<impl Stream<Item=Tag<I>>>
+        //ParallelStream<impl Stream<Item=Tag<I>>>
+        //ParallelStream<impl Stream<Item=Tag<I>, Error=RecvError<S::Error>>>
+        ParallelStream<JoinTagged<Receiver<S>>>
     where
         I:Send,
         S: Send + 'static,
@@ -208,7 +210,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
     }
 
     pub fn instrumented_fold<Fut, T, F, Finit>(self, init: Finit, f:F, name: String) ->
-        impl Stream<Item=T>
+        impl Stream<Item=T, Error=S::Error>
         //ParallelTask<InstrumentedFold<S, F, Fut, T>>
         where S: 'static,
               Finit: Fn() -> T + Copy + 'static,
