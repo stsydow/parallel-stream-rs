@@ -1,6 +1,6 @@
 [package]
 name = "parallel-stream"
-version = "0.1.0"
+version = "0.2.0"
 authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
 edition = "2018"
 
