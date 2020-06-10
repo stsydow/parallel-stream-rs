@@ -24,6 +24,12 @@ impl<I> Tag<I> {
     }
 
     pub fn nr(&self) -> usize { self.seq_nr }
+
+    pub fn map<F, U>(self, mut f:F) -> Tag<U>
+        where F:FnMut(I) -> U
+    {
+        tag(self.seq_nr, (f)(self.data))
+    }
 }
 
 
@@ -46,6 +52,7 @@ impl<I> PartialEq for Tag<I> {
 }
 
 impl<I> Eq for Tag<I> {}
+
 
 pub struct ParallelStream<S>
 {
@@ -75,6 +82,31 @@ where
 
     pub fn join(self) -> JoinTagged<S, I> {
         join_tagged(self)
+    }
+
+    pub fn instrumented_map_tagged<U, F, FTag>(self, f: F, name:String)
+        -> ParallelStream<InstrumentedMap<S, impl FnMut(Tag<I>) -> Tag<U> >>
+        where F: FnMut(I) -> U + Copy,
+              //FTag: FnMut(Tag<I>) -> Tag<U>
+    {
+        let mut streams = Vec::new();
+        for input in self.streams {
+            //let map = input.instrumented_map(map_tag(f), name.clone());
+            let map = input.instrumented_map(move |t| t.map(f) , name.clone());
+            streams.push(map);
+        }
+        ParallelStream{ streams }
+    }
+
+
+    pub fn untag(self) -> ParallelStream<impl Stream<Item=I>> {
+        let mut streams = Vec::new();
+        for input in self.streams {
+            let map = input.map(|t| t.untag());
+            streams.push(map);
+        }
+        ParallelStream{ streams }
+
     }
 
     //TODO map chunkedmap fold
@@ -175,11 +207,11 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         ParallelStream{ streams }
     }
 
-    pub fn instrumented_fold<Fut, T, F>(self, init:T, f:F, name: String) ->
+    pub fn instrumented_fold<Fut, T, F, Finit>(self, init: Finit, f:F, name: String) ->
         impl Stream<Item=T>
         //ParallelTask<InstrumentedFold<S, F, Fut, T>>
         where S: 'static,
-              T: Copy + 'static,
+              Finit: Fn() -> T + Copy + 'static,
               F: FnMut(T, S::Item) -> Fut + Copy + 'static,
               Fut: IntoFuture<Item = T>,
               S::Error: From<Fut::Error>,
@@ -188,7 +220,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
     {
         let degree = self.streams.len();
         futures::stream::iter_ok(self.streams).map(move |input|{
-            input.instrumented_fold(init, f, name.clone())
+            input.instrumented_fold(init(), f, name.clone())
         }).buffer_unordered(degree)
     }
 
