@@ -2,7 +2,7 @@ use futures::{try_ready, Async, AsyncSink, Poll, Future, Sink, Stream, StartSend
 use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
 
-use crate::{tag, Tag, ParallelStream};
+use crate::parallel_stream::{tag, Tag, ParallelStream};
 
 pub struct ForkRR<S> {
     pipelines: Vec<Option<S>>,
@@ -48,7 +48,7 @@ S: Send,
 
         tokio::spawn(fork_task);
 
-        ParallelStream{streams}
+        ParallelStream::from(streams)
 }
 
 impl<S, Item> Sink for ForkRR<S>
@@ -143,7 +143,7 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
 
         tokio::spawn(fork_task);
 
-        ParallelStream{streams}
+        ParallelStream::from(streams)
 }
 
 

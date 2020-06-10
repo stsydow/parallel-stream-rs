@@ -9,7 +9,7 @@ use test::Bencher;
 use test::black_box;
 
 use crate::stream_fork::fork_rr;
-use crate::{StreamExt, Tag};
+use crate::{StreamExt, parallel_stream::Tag};
 
 const BLOCK_COUNT:usize = 1_000;
 

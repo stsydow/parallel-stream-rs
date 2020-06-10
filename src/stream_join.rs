@@ -2,7 +2,7 @@ use futures::{try_ready, Async, Poll, Stream};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use crate::{Tag, ParallelStream};
+use crate::parallel_stream::{Tag, ParallelStream};
 
 /*
 struct TaggedQueueItem<I> {
@@ -59,9 +59,10 @@ where S: Stream<Item=Tag<I>>
         queue.push(TaggedQueueItem{event: None, source_id: i});
     }
     */
-    let degree = par_stream.streams.len();
+    let degree = par_stream.width();
     let mut pipelines = Vec::with_capacity(degree);
-    for stream in par_stream.streams {
+    let streams: Vec<S> = par_stream.into();
+    for stream in streams {
         pipelines.push( Input{ stream: Some(stream), buffer: Vec::new()});
     }
 
@@ -92,7 +93,7 @@ where
 
             if pipe.buffer.len() > 0 {
                 let item = pipe.buffer.first().unwrap();
-                if item.seq_nr == self.next_tag {
+                if item.nr() == self.next_tag {
                     let item = pipe.buffer.pop().unwrap();
                     self.next_tag += 1;
                     return Ok(Async::Ready(Some(item.untag())))
@@ -102,8 +103,8 @@ where
                 if let Some(stream) = &mut pipe.stream {
                     match stream.poll()? {
                         Async::Ready(Some(item)) => {
-                            assert!(item.seq_nr >= self.next_tag);
-                            if item.seq_nr == self.next_tag {
+                            assert!(item.nr() >= self.next_tag);
+                            if item.nr() == self.next_tag {
                                 self.next_tag += 1;
                                 return Ok(Async::Ready(Some(item.untag())));
                             } else {

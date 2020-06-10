@@ -3,7 +3,7 @@ use crate::instrumented_fold::{self, InstrumentedFold};
 use crate::selective_context::{self, SelectiveContext, SelectiveContextBuffered};
 use crate::probe_stream;
 use crate::stream_fork;
-use crate::{Tag, ParallelStream};
+use crate::{parallel_stream::Tag, ParallelStream};
 use tokio::prelude::*;
 
 use std::hash::Hash;
