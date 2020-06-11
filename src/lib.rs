@@ -35,6 +35,9 @@ pub use crate::stream_ext::StreamExt;
 mod parallel_stream;
 pub use crate::parallel_stream::ParallelStream;
 
+mod tagged_stream;
+pub use crate::tagged_stream::{TaggedStream, Tag, tag};
+
 #[cfg(test)]
 mod tests;
 

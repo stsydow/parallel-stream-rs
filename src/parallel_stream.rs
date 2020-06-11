@@ -1,58 +1,11 @@
 
-use std::cmp::Ordering;
 use std::hash::Hash;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
 
-use crate::{StreamExt, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked};
+use crate::{StreamExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 //TODO see https://github.com/async-rs/parallel-stream/
-
-pub struct Tag<I> {
-    seq_nr: usize,
-    data: I
-}
-
-pub fn tag<I>(seq_nr: usize, data:I) -> Tag<I>
-{
-    Tag{seq_nr, data}
-}
-
-impl<I> Tag<I> {
-    pub fn untag(self) -> I {
-        self.data
-    }
-
-    pub fn nr(&self) -> usize { self.seq_nr }
-
-    pub fn map<F, U>(self, mut f:F) -> Tag<U>
-        where F:FnMut(I) -> U
-    {
-        tag(self.seq_nr, (f)(self.data))
-    }
-}
-
-
-impl<I> Ord for Tag<I> {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.seq_nr.cmp(&other.seq_nr)
-    }
-}
-
-impl<I> PartialOrd for Tag<I> {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<I> PartialEq for Tag<I> {
-    fn eq(&self, other: &Self) -> bool {
-        self.seq_nr == other.seq_nr
-    }
-}
-
-impl<I> Eq for Tag<I> {}
-
 
 pub struct ParallelStream<S>
 {
@@ -71,16 +24,25 @@ impl<S> From<Vec<S>> for ParallelStream<S> {
     }
 }
 
+impl<S> ParallelStream<S>
+{
+    pub fn width(&self) -> usize {
+        self.streams.len()
+    }
+}
+
 impl<S, I> ParallelStream<S>
 where
     //I: Send + 'static,
     S: Stream<Item=Tag<I>>,// + Send + 'static,
 {
+    /*
     pub fn width(&self) -> usize {
         self.streams.len()
     }
+    */
 
-    pub fn join(self) -> JoinTagged<S, I> {
+    pub fn join_ordered(self) -> JoinTagged<S> {
         join_tagged(self)
     }
 
@@ -99,7 +61,7 @@ where
     }
 
 
-    pub fn untag(self) -> ParallelStream<impl Stream<Item=I, Error=S::Error>> {
+    pub fn untag(self) -> ParallelStream<stream::Map<S, impl FnMut(S::Item) -> I>> {
         let mut streams = Vec::new();
         for input in self.streams {
             let map = input.map(|t| t.untag());
@@ -130,10 +92,10 @@ where
     }
     */
 
-    pub fn shuffle<FSel>(self, selector: FSel, degree: usize) ->
-        //ParallelStream<impl Stream<Item=Tag<I>>>
-        //ParallelStream<impl Stream<Item=Tag<I>, Error=RecvError<S::Error>>>
-        ParallelStream<JoinTagged<Receiver<S>>>
+    pub fn shuffle_tagged<FSel>(self, selector: FSel, degree: usize) ->
+        // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
+        // TODO really should be:
+        ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
         I:Send,
         S: Send + 'static,
@@ -146,7 +108,8 @@ where
         }
 
         for input in self.streams {
-            let splits = input.fork_sel( move |t| (selector)(&t.data), degree);
+            let splits = input.fork_sel( move |t| (selector)(t.as_ref()), degree);
+            // TODO here it gets a other Tag
 
 
             let mut i = 0;
@@ -158,10 +121,11 @@ where
 
         let mut joins = Vec::with_capacity(degree);
         for streams in joins_streams {
-            joins.push(ParallelStream{streams}.join())
+            joins.push(ParallelStream{streams}.join_ordered()) //TODO here it is removed
+
         }
 
-        ParallelStream{ streams:joins }
+        ParallelStream::from(joins)
     }
 }
 
@@ -172,46 +136,83 @@ where
 {
 
     pub fn decouple(self, buf_size: usize) ->  ParallelStream<Receiver<S::Item>> {
+        self.add_stage(|s| s.decouple(buf_size))
+    }
 
-        let mut streams = Vec::new();
+    pub fn join_unordered(self, buf_size: usize) ->  Receiver<S::Item> {
+
+        let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
-            let (tx, rx) = channel::<S::Item>(buf_size);
-            streams.push(rx);
-
             let pipe_task = input
-                .forward(tx.sink_map_err(|e| {
-                    eprintln!("decouple in send error:{}", e);
+                .forward(join_tx.clone().sink_map_err(|e| {
+                    eprintln!("join in send error:{}", e);
                     panic!()
                 }))
-            .map(|(_in, _out)| ())
+                .and_then(|(_in, tx)|  tx.flush())
+                .map( |_tx| () )
                 .map_err(|_e| {
                     panic!()
                 });
 
             tokio::spawn(pipe_task);
         }
-        ParallelStream{ streams}
+
+        join_rx
+    }
+
+    pub fn shuffle_unordered<FSel>(self, selector: FSel, degree: usize) ->
+        // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
+        // TODO really should be:
+        ParallelStream<Receiver<S::Item>>
+    where
+        S: Send + 'static,
+        FSel: Fn(&S::Item) -> usize + Copy + Send + 'static,
+    {
+        let input_degree = self.streams.len();
+        //let joins_streams = vec![ Vec::with_capacity(input_degree); degree];
+        let mut joins_streams = Vec::with_capacity(degree);
+        for _i in 0 .. degree {
+            joins_streams.push( Vec::with_capacity(input_degree))
+        }
+
+        for input in self.streams {
+            let splits = input.fork_sel(selector, degree);
+            // TODO here it gets a other Tag
+
+
+            let mut i = 0;
+            for s in splits.streams {
+                joins_streams[i].push(s);
+                i += 1;
+            }
+        }
+
+        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter().map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree)).collect();
+
+        ParallelStream::from(joins)
     }
 }
 
 impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged version
 {
 
+    pub fn add_stage<U, F>(self, stage: F) -> ParallelStream<U>
+        where F: FnMut(S) -> U,
+    {
+        let streams =  self.streams.into_iter().map(stage).collect();
+        ParallelStream{ streams }
+    }
+
     pub fn instrumented_map<U, F>(self, f: F, name:String)
         -> ParallelStream<InstrumentedMap<S, F>>
         where F: FnMut(S::Item) -> U + Copy,
     {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            let map = input.instrumented_map(f, name.clone());
-            streams.push(map);
-        }
-        ParallelStream{ streams }
+        self.add_stage(|s| s.instrumented_map(f, name.clone()))
     }
 
     pub fn instrumented_fold<Fut, T, F, Finit>(self, init: Finit, f:F, name: String) ->
         impl Stream<Item=T, Error=S::Error>
-        //ParallelTask<InstrumentedFold<S, F, Fut, T>>
+        //futures::stream::BufferUnordered< futures::stream::IterOk< ... InstrumentedFold<S, F, Fut, T>, S::Error>>
         where S: 'static,
               Finit: Fn() -> T + Copy + 'static,
               F: FnMut(T, S::Item) -> Fut + Copy + 'static,
@@ -239,12 +240,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         FSel: Fn(&S::Item) -> Key + Copy,
         FWork: Fn(&mut Ctx, &S::Item) -> R + Copy,
     {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            let ctx = input.selective_context(ctx_builder, selector, work, name.clone());
-            streams.push(ctx);
-        }
-        ParallelStream{ streams }
+        self.add_stage(|s| s.selective_context(ctx_builder, selector, work, name.clone()))
     }
 }
 
@@ -256,12 +252,7 @@ impl<S: Stream, I> ParallelStream<S>
         -> ParallelStream<InstrumentedMapChunked<S, F>>
         where F: FnMut(I) -> U + Copy,
     {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            let map = input.instrumented_map_chunked(f, name.clone());
-            streams.push(map);
-        }
-        ParallelStream{ streams }
+        self.add_stage(|s| s.instrumented_map_chunked(f, name.clone()))
     }
 
     // TODO only useful after shuffle
@@ -273,19 +264,12 @@ impl<S: Stream, I> ParallelStream<S>
         name: String
     ) -> ParallelStream<SelectiveContextBuffered<Key, Ctx, S, CtxInit, FSel, FWork>>
     where
-        //Ctx:Context<Event=Event, Result=R>,
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx + Copy,
         FSel: Fn(&I) -> Key + Copy,
         FWork: Fn(&mut Ctx, &I) -> R + Copy,
         S: Sized,
     {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            let map = input.selective_context_buffered(ctx_builder, selector, work, name.clone());
-            //instrumented_map(f, name.clone());
-            streams.push(map);
-        }
-        ParallelStream{ streams }
+        self.add_stage(|s| s.selective_context_buffered(ctx_builder, selector, work, name.clone()))
     }
 }

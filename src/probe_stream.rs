@@ -99,9 +99,7 @@ impl<S, I> Probe<S>
             stream
         }
     }
-
 }
-
 
 impl<S, I>  Stream for Probe<S>
     where S: Stream<Item=(Instant, I)>
@@ -159,16 +157,7 @@ where S: Stream<Item=(Instant, I)>,
 
     fn poll(&mut self) -> Poll<Option<(Instant, U)>, S::Error> {
         let option = try_ready!(self.stream.poll());
-        let result = match option {
-            None => {
-                None
-            },
-            Some((timestamp, item)) => {
-                let f_result = (self.function)(item);
-                Some((timestamp, f_result))
-            }
-        };
-
+        let result = option.map(|(timestamp, item)| (timestamp, (self.function)(item)) );
         Ok(Async::Ready(result))
     }
 }

@@ -2,7 +2,7 @@ use futures::{try_ready, Async, Poll, Stream};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use crate::parallel_stream::{Tag, ParallelStream};
+use crate::{Tag, ParallelStream};
 
 /*
 struct TaggedQueueItem<I> {
@@ -37,21 +37,19 @@ struct Input<S:Stream> {
     buffer: Vec<S::Item> // Tag<_>
 }
 
-impl<S> Input<S> {
+impl<S:Stream> Input<S> {
     fn is_closed(&self) -> bool {
         self.stream.is_none() && self.buffer.is_empty()
     }
 }
 
-pub struct JoinTagged<S>
-//where S: Stream<Item=Tag<I>>,
+pub struct JoinTagged<S:Stream>
 {
     pipelines: Vec<Input<S>>,
     next_tag: usize,
 }
 
-pub fn join_tagged<S, I>(par_stream: ParallelStream<S>) -> JoinTagged<S>
-where S: Stream<Item=Tag<I>>
+pub fn join_tagged<S:Stream>(par_stream: ParallelStream<S>) -> JoinTagged<S>
 {
     /*
     let mut queue = BinaryHeap::new();
@@ -77,7 +75,7 @@ impl<S, I> Stream for JoinTagged<S>
 where
     S: Stream<Item=Tag<I>>,
 {
-    type Item = I;
+    type Item = S::Item;
     type Error = S::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -96,7 +94,7 @@ where
                 if item.nr() == self.next_tag {
                     let item = pipe.buffer.pop().unwrap();
                     self.next_tag += 1;
-                    return Ok(Async::Ready(Some(item.untag())))
+                    return Ok(Async::Ready(Some(item)));
                 }
                 //continue;
             } else {
@@ -106,7 +104,7 @@ where
                             assert!(item.nr() >= self.next_tag);
                             if item.nr() == self.next_tag {
                                 self.next_tag += 1;
-                                return Ok(Async::Ready(Some(item.untag())));
+                                return Ok(Async::Ready(Some(item)));
                             } else {
                                 pipe.buffer.push(item);
                                 //continue;

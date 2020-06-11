@@ -3,8 +3,10 @@ use crate::instrumented_fold::{self, InstrumentedFold};
 use crate::selective_context::{self, SelectiveContext, SelectiveContextBuffered};
 use crate::probe_stream;
 use crate::stream_fork;
-use crate::{parallel_stream::Tag, ParallelStream};
+use crate::tagged_stream;
+use crate::{TaggedStream, ParallelStream};
 use tokio::prelude::*;
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 use std::hash::Hash;
 
@@ -75,7 +77,13 @@ pub trait StreamExt: Stream {
         selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
-    fn fork(self, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Tag<Self::Item>>>
+    fn tagged(self) -> TaggedStream<Self>
+        where Self: Sized
+    {
+        tagged_stream::tagged_stream(self)
+    }
+
+    fn fork(self, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             Self: Sized + Send + 'static,
@@ -83,7 +91,7 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream(self, degree)
     }
 
-    fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Tag<Self::Item>>>
+    fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
@@ -92,6 +100,38 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream_sel(self, selector, degree)
     }
 
+    fn forward_and_spawn<SOut>(self, sink:SOut)
+        where
+            SOut: Sink<SinkItem=Self::Item> + Send + 'static,
+            SOut::SinkError: std::fmt::Display,
+            Self::Item: Send,
+            Self: Sized + Send + 'static,
+    {
+        let task = self
+            .forward(sink.sink_map_err(|e| {
+                eprintln!("decouple in send error:{}", e);
+                panic!()
+            }))
+            .and_then(|(_in, tx)| tx.flush() )
+            .map(|_tx| () )
+            .map_err(|_e| {
+                panic!()
+            });
+
+        tokio::spawn(task);
+
+    }
+
+    fn decouple(self, buf_size: usize) -> Receiver<Self::Item>
+        where Self::Item: Send,
+            Self: Sized + Send + 'static,
+    {
+        let (tx, rx) = channel::<Self::Item>(buf_size);
+
+        self.forward_and_spawn(tx);
+
+        rx
+    }
 
     fn meter(self, name: String) -> probe_stream::Meter<Self>
         where Self: Sized
@@ -99,7 +139,7 @@ pub trait StreamExt: Stream {
         probe_stream::Meter::new(self, name)
     }
 
-    fn tag(self) -> probe_stream::Tag<Self>
+    fn time_tagged(self) -> probe_stream::Tag<Self>
         where Self: Sized
     {
         probe_stream::Tag::new(self)

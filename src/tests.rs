@@ -9,7 +9,7 @@ use test::Bencher;
 use test::black_box;
 
 use crate::stream_fork::fork_rr;
-use crate::{StreamExt, parallel_stream::Tag};
+use crate::{StreamExt};
 
 const BLOCK_COUNT:usize = 1_000;
 
@@ -214,14 +214,15 @@ fn fork_join_1k(b: &mut Bencher) {
     let (fork, join) = {
         let mut senders = Vec::new();
         //let mut join = Join::new();
-        let (out_tx, out_rx) = channel::<Tag<Message>>(pipe_threads+1);
+        let (out_tx, out_rx) = channel::<Message>(pipe_threads+1);
         for _i in 0..pipe_threads {
-            let (in_tx, in_rx) = channel::<Tag<Message>>(2);
+            let (in_tx, in_rx) = channel::<Message>(2);
 
             senders.push(in_tx);
             let forward = in_rx.forward(out_tx.clone().sink_map_err(|e| panic!("forward send error: {}", e)));
 
-            let pipe_task = forward.and_then(|(_zero, tx)|  tx.flush())
+            let pipe_task = forward
+                .and_then(|(_zero, tx)|  tx.flush())
                 .map( |_tx| () )
                 .map_err(|_e| ());
             runtime.spawn(pipe_task);
@@ -253,12 +254,12 @@ fn fork_join_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn fork_join_tagged_1k(b: &mut Bencher) {
+fn fork_join_unorderd_1k(b: &mut Bencher) {
     //let mut runtime = Runtime::new().expect("can not start runtime");
     const pipe_threads:usize = 2;
     b.iter(|| {
         tokio::run(futures::lazy(|| {
-            let pipeline = dummy_stream().fork(pipe_threads).decouple(2).join();
+            let pipeline = dummy_stream().fork(pipe_threads).join_unordered(2*pipe_threads);
 
             let pipeline_task = pipeline.for_each(|_item| {
                 Ok(())
@@ -283,7 +284,7 @@ fn shuffle_1k(b: &mut Bencher) {
     b.iter(|| {
         tokio::run(futures::lazy(|| {
             let pipeline = dummy_stream().fork(pipe_threads)
-                .shuffle(|i|{i * 7}, pipe_threads).decouple(2).join();
+                .shuffle_unordered(|i|{i * 7}, pipe_threads).join_unordered(pipe_threads);
 
             let pipeline_task = pipeline
             /*
@@ -309,6 +310,20 @@ fn shuffle_1k(b: &mut Bencher) {
         //runtime.block_on(pipeline_task).expect("error in main task");
         */
     });
+}
+
+#[bench]
+fn file_io(b: &mut Bencher) {
+    const pipe_threads:usize = 2;
+    b.iter(||
+    {
+        tokio::run(futures::lazy(|| {
+            // unimplemented!();
+                future::ok(())
+            // TODO src/word_count_para_partition_shuffle_chunked.rs
+        }));
+    });
+
 }
 
 #[bench]

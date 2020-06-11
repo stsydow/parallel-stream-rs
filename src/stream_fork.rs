@@ -1,12 +1,12 @@
-use futures::{try_ready, Async, AsyncSink, Poll, Future, Sink, Stream, StartSend};
+use futures::{try_ready, Async, Poll, Future, Sink, Stream, StartSend};
 use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
 
-use crate::parallel_stream::{tag, Tag, ParallelStream};
+use crate::{ParallelStream, StreamExt};
 
 pub struct ForkRR<S> {
     pipelines: Vec<Option<S>>,
-    seq_nr: usize,
+    next_index: usize,
 }
 
 pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
@@ -18,11 +18,11 @@ pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
 
     ForkRR {
         pipelines,
-        seq_nr: 0,
+        next_index: 0,
     }
 }
 
-pub fn fork_stream<S>(stream:S, degree:usize) -> ParallelStream<Receiver<Tag<S::Item>>>
+pub fn fork_stream<S>(stream:S, degree:usize) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S: Send,
@@ -30,47 +30,31 @@ S: Send,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<Tag<S::Item>>(1);
+            let (tx, rx) = channel::<S::Item>(1);
             sinks.push(tx);
             streams.push(rx);
         }
         let fork = fork_rr(sinks);
 
-        let fork_task = stream
-            .forward(fork.sink_map_err(|e| {
-                eprintln!("fork send error:{}", e);
-                panic!()
-        }))
-        .map(|(_in, _out)| ())
-        .map_err(|_e| {
-            panic!()
-        });
-
-        tokio::spawn(fork_task);
+        stream.forward_and_spawn(fork);
 
         ParallelStream::from(streams)
 }
 
 impl<S, Item> Sink for ForkRR<S>
-    where S: Sink<SinkItem=Tag<Item>>
+    where S: Sink<SinkItem=Item>
 {
     type SinkItem = Item;
     type SinkError = S::SinkError;
 
     fn start_send(&mut self, item: Item) -> StartSend<Item, Self::SinkError> {
-        let i = self.seq_nr % self.pipelines.len();
+        let i = self.next_index % self.pipelines.len();
         let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
-        let tagged_item = tag(self.seq_nr, item);
-        let result = sink.start_send(tagged_item);
-        match result? {
-            AsyncSink::Ready => {
-                self.seq_nr += 1;
-                Ok(AsyncSink::Ready)
-            },
-            AsyncSink::NotReady(tagged) => {
-                Ok(AsyncSink::NotReady(tagged.untag()))
-            }
+        let result = sink.start_send(item)?;
+        if result.is_ready() {
+            self.next_index += 1;
         }
+        Ok(result)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
@@ -98,7 +82,6 @@ impl<S, Item> Sink for ForkRR<S>
 pub struct ForkSel<S, FSel> {
     selector: FSel,
     pipelines: Vec<Option<S>>,
-    seq_nr: usize,
 }
 
 pub fn fork_sel<S:Sink, FSel>(sinks: Vec<S>, selector: FSel) -> ForkSel<S, FSel>
@@ -111,12 +94,13 @@ pub fn fork_sel<S:Sink, FSel>(sinks: Vec<S>, selector: FSel) -> ForkSel<S, FSel>
 
     ForkSel {
         selector,
-        pipelines,
-        seq_nr: 0,
+        pipelines
     }
 }
 
-pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<Tag<S::Item>>>
+//TODO tag -> fork_stream_sel -> tag
+//TODO raw -> fork_stream_sel -> raw
+pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S: Send,
@@ -125,50 +109,32 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<Tag<S::Item>>(1);
+            let (tx, rx) = channel::<S::Item>(1);
             sinks.push(tx);
             streams.push(rx);
         }
         let fork = fork_sel(sinks, selector);
 
-        let fork_task = stream
-            .forward(fork.sink_map_err(|e| {
-                eprintln!("fork send error:{}", e);
-                panic!()
-        }))
-        .map(|(_in, _out)| ())
-        .map_err(|_e| {
-            panic!()
-        });
-
-        tokio::spawn(fork_task);
+        stream.forward_and_spawn(fork);
 
         ParallelStream::from(streams)
 }
 
 
-impl<S, Item, FSel> Sink for ForkSel<S, FSel>
+impl<S, FSel> Sink for ForkSel<S, FSel>
 
-where S: Sink<SinkItem=Tag<Item>>,
-      FSel: Fn(&Item) -> usize,
+where S: Sink,
+      S::SinkItem: Send,
+      FSel: Fn(&S::SinkItem) -> usize,
 {
-    type SinkItem = Item;
+    type SinkItem = S::SinkItem;
     type SinkError = S::SinkError;
 
-    fn start_send(&mut self, item: Item) -> StartSend<Item, Self::SinkError> {
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
         let i = (self.selector)(&item) % self.pipelines.len();
         let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
-        let tagged_item = tag(self.seq_nr, item);
-        let result = sink.start_send(tagged_item);
-        match result? {
-            AsyncSink::Ready => {
-                self.seq_nr += 1;
-                Ok(AsyncSink::Ready)
-            },
-            AsyncSink::NotReady(tagged) => {
-                Ok(AsyncSink::NotReady(tagged.untag()))
-            }
-        }
+        let result = sink.start_send(item)?;
+        Ok(result)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
