@@ -143,18 +143,7 @@ where
 
         let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
-            let pipe_task = input
-                .forward(join_tx.clone().sink_map_err(|e| {
-                    eprintln!("join in send error:{}", e);
-                    panic!()
-                }))
-                .and_then(|(_in, tx)|  tx.flush())
-                .map( |_tx| () )
-                .map_err(|_e| {
-                    panic!()
-                });
-
-            tokio::spawn(pipe_task);
+            input.forward_and_spawn(join_tx.clone());
         }
 
         join_rx
