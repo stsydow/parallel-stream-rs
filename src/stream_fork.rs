@@ -25,6 +25,7 @@ pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
 pub fn fork_stream<S>(stream:S, degree:usize) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
+S::Error: std::fmt::Debug,
 S: Send,
 {
         let mut streams = Vec::new();
@@ -98,6 +99,7 @@ pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
 pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
+S::Error: std::fmt::Debug,
 S: Send,
 FSel: Fn(&S::Item) -> usize + Send + 'static,
 {

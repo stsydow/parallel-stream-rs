@@ -36,6 +36,7 @@ pub fn fork_stream_sel_chunked<S, FSel, I>(stream:S, selector: FSel, degree:usiz
 where
     S: Stream + Send + 'static,
     S::Item: std::iter::IntoIterator<Item=I> + Send,
+    S::Error: std::fmt::Debug,
     //<S::Item as IntoIterator>::Item: Send,
     I: Send + 'static,
     FSel: Fn(&I) -> usize + Send + 'static,
@@ -55,7 +56,7 @@ where
 
 impl<S, Item, FSel> ChunkedFork<S, FSel>
 where
-    S: Sink<SinkItem=Vec<Item>>, // + Clone,
+    S: Sink<SinkItem=Vec<Item>>,
 {
     pub fn is_clear(&self) -> bool {
         ! self.pipelines.iter().all(|pipe| {

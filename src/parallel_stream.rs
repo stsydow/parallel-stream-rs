@@ -97,8 +97,9 @@ where
         // TODO really should be:
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
-        I:Send,
+        I: Send,
         S: Send + 'static,
+        S::Error: std::fmt::Debug,
         FSel: Fn(&I) -> usize + Copy + Send + 'static,
     {
         let input_degree = self.streams.len();
@@ -133,6 +134,7 @@ impl<S> ParallelStream<S>
 where
     S: Stream + Send + 'static,
     S::Item: Send + 'static,
+    S::Error: std::fmt::Debug,
 {
 
     pub fn decouple(self, buf_size: usize) ->  ParallelStream<Receiver<S::Item>> {

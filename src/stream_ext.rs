@@ -61,6 +61,7 @@ pub trait StreamExt: Stream {
     fn fork(self, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
+            Self::Error: std::fmt::Debug,
             Self: Sized + Send + 'static,
     {
         stream_fork::fork_stream(self, degree)
@@ -69,6 +70,7 @@ pub trait StreamExt: Stream {
     fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
+            Self::Error: std::fmt::Debug,
             FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
             Self: Sized + Send + 'static,
     {
@@ -78,19 +80,20 @@ pub trait StreamExt: Stream {
     fn forward_and_spawn<SOut>(self, sink:SOut)
         where
             SOut: Sink<SinkItem=Self::Item> + Send + 'static,
-            SOut::SinkError: std::fmt::Display,
+            SOut::SinkError: std::fmt::Debug,
             Self::Item: Send,
+            Self::Error: std::fmt::Debug,
             Self: Sized + Send + 'static,
     {
         let task = self
             .forward(sink.sink_map_err(|e| {
-                eprintln!("decouple in send error:{}", e);
+                eprintln!("decouple in send error:{:#?}", e);
                 panic!()
             }))
             .and_then(|(_in, tx)| tx.flush() )
             .map(|_tx| () )
-            .map_err(|_e| {
-                panic!()
+            .map_err(|e| {
+                panic!("{:#?}", e)
             });
 
         tokio::spawn(task);
@@ -99,6 +102,7 @@ pub trait StreamExt: Stream {
 
     fn decouple(self, buf_size: usize) -> Receiver<Self::Item>
         where Self::Item: Send,
+            Self::Error: std::fmt::Debug,
             Self: Sized + Send + 'static,
     {
         let (tx, rx) = channel::<Self::Item>(buf_size);
@@ -166,6 +170,7 @@ pub trait StreamChunkedExt: Stream {
             FSel: Fn(&Chunk::Item) -> usize + Copy + Send + 'static,
             Self: Stream<Item=Chunk> + Sized + Send + 'static,
             Self::Item: Send,
+            Self::Error: std::fmt::Debug,
     {
         stream_fork_chunked::fork_stream_sel_chunked(self, selector, degree)
     }

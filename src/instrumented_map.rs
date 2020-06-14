@@ -97,7 +97,7 @@ pub fn instrumented_map_chunked<S, C, F, U>(stream: S, function: F, name: String
 impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
     where C: IntoIterator,
           S: Stream<Item=C>,
-          F: FnMut(C::Item) -> U,// + Copy + 'static,
+          F: FnMut(C::Item) -> U,
 {
     type Item = Vec<U>;
     //type Item = std::iter::Map<C::IntoIter, &'static mut F>;
