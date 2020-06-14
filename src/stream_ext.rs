@@ -3,6 +3,7 @@ use crate::instrumented_fold::{self, InstrumentedFold};
 use crate::selective_context::{self, SelectiveContext, SelectiveContextBuffered};
 use crate::probe_stream;
 use crate::stream_fork;
+use crate::stream_fork_chunked;
 use crate::tagged_stream;
 use crate::{TaggedStream, ParallelStream};
 use tokio::prelude::*;
@@ -19,14 +20,6 @@ pub trait StreamExt: Stream {
               Self: Sized
     {
         instrumented_map::instrumented_map(self, f, name)
-    }
-
-    fn instrumented_map_chunked<I, U, F>(self, f: F, name:String) -> InstrumentedMapChunked<Self, F>
-        where Self:Stream<Item=Vec<I>>,
-              F: FnMut(I) -> U,
-              Self: Sized
-    {
-        instrumented_map::instrumented_map_chunked(self, f, name)
     }
 
     fn instrumented_fold<Fut, T, F>(self, init:T, f:F, name: String) -> InstrumentedFold<Self, F, Fut, T>
@@ -57,24 +50,6 @@ pub trait StreamExt: Stream {
         Self: Sized,
     {
         selective_context::selective_context(self, ctx_builder, selector, work, name)
-    }
-
-    fn selective_context_buffered<Event, R, Key, Ctx, CtxInit, FSel, FWork>(
-        self,
-        ctx_builder: CtxInit,
-        selector: FSel,
-        work: FWork,
-        name: String
-    ) -> SelectiveContextBuffered<Key, Ctx, Self, CtxInit, FSel, FWork>
-    where
-        //Ctx:Context<Event=Event, Result=R>,
-        Key: Ord + Hash,
-        CtxInit: Fn(&Key) -> Ctx,
-        FSel: Fn(&Event) -> Key,
-        FWork: Fn(&mut Ctx, &Event) -> R,
-        Self: Sized + Stream<Item=Vec<Event>>,
-    {
-        selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
     fn tagged(self) -> TaggedStream<Self>
@@ -148,4 +123,50 @@ pub trait StreamExt: Stream {
     // Chunks
     // from ../src/util.rs
     // map() filer() for_each() ...
+}
+
+impl<T: ?Sized, Chunk: IntoIterator> StreamChunkedExt for T where T: Stream<Item=Chunk>
+{}
+
+pub trait StreamChunkedExt: Stream {
+    fn instrumented_map_chunked<U, F, C>(self, f: F, name:String) -> InstrumentedMapChunked<Self, F>
+        where C: IntoIterator,
+              Self:Stream<Item=C>,
+              F: FnMut( C::Item) -> U,
+              Self: Sized ,
+              //<Self as futures::stream::Stream>::Item: IntoIterator
+    {
+        instrumented_map::instrumented_map_chunked(self, f, name)
+    }
+
+    fn selective_context_buffered<Chunk, R, Key, Ctx, CtxInit, FSel, FWork>(
+        self,
+        ctx_builder: CtxInit,
+        selector: FSel,
+        work: FWork,
+        name: String
+    ) -> SelectiveContextBuffered<Key, Ctx, Self, CtxInit, FSel, FWork>
+    where
+        //Ctx:Context<Event=Event, Result=R>,
+        Chunk: IntoIterator,
+        Self:Stream<Item=Chunk>,
+        Key: Ord + Hash,
+        CtxInit: Fn(&Key) -> Ctx,
+        FSel: Fn(&Chunk::Item) -> Key,
+        FWork: FnMut(&mut Ctx, Chunk::Item) -> R,
+        Self: Sized,
+    {
+        selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
+    }
+
+    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Vec<Chunk::Item>>>
+        where
+            Chunk: IntoIterator,
+            Chunk::Item: Send + 'static,
+            FSel: Fn(&Chunk::Item) -> usize + Copy + Send + 'static,
+            Self: Stream<Item=Chunk> + Sized + Send + 'static,
+            Self::Item: Send,
+    {
+        stream_fork_chunked::fork_stream_sel_chunked(self, selector, degree)
+    }
 }

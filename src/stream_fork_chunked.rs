@@ -1,101 +1,155 @@
-use futures::{try_ready, Async, Poll, Sink, StartSend};
+use futures::{try_ready, Stream, Async, AsyncSink, Poll, Sink, StartSend};
 
-pub struct Chunk<Item> {
-    seq_no: usize,
-    items: Vec<Item>
-}
+use tokio::sync::mpsc::{channel, Receiver};
+use crate::{ParallelStream, StreamExt};
+use std::iter::FromIterator;
 
-pub struct ChunkedFork<S: Sink, FSel, Item> {
-    selector: FSel,
-    pipelines: Vec<Option<S>>,
-    buffers: Vec<Chunk<Item>>,
-    capacity: usize,
-    seq_no: usize,
-}
-
-impl<S: Sink<SinkItem=Vec<Item>>, FSel, Item> ChunkedFork<S, FSel, Item>
-    where
-        FSel: Fn(&Item) -> usize,
+struct Pipe<S>
+where S: Sink,
 {
-    pub fn new(selector: FSel, sinks: Vec<S>, capacity:usize) -> Self {
-        let mut pipelines = Vec::with_capacity(sinks.len());
-        let mut buffers = Vec::with_capacity(sinks.len());
-        for s in sinks {
-            pipelines.push(Some(s));
-            buffers.push(Vec::with_capacity(capacity));
-        }
-        assert!(!pipelines.is_empty());
+    sink: Option<S>,
+    buffer: Option<S::SinkItem>,
+}
 
-        ChunkedFork {
-            selector,
-            pipelines,
-            buffers,
-            capacity,
-            seq_no: 0,
-        }
-    }
-
-    /*
-    pub fn add(&mut self, sink: EventSink) {
-        self.pipelines.push(sink);
-    }
-    */
+pub struct ChunkedFork<S: Sink, FSel>
+where S: Sink,
+{
+    selector: FSel,
+    pipelines: Vec<Pipe<S>>,
 }
 
 
-impl<Item, S: Sink<SinkItem=Vec<Item>>, FSel> Sink for ChunkedFork<S, FSel, Item>
+pub fn chunked_fork<S, Si, FSel, Item>(sinks: Si, selector: FSel) -> ChunkedFork<S, FSel>
 where
+    S: Sink<SinkItem=Vec<Item>>,
+    Si: IntoIterator<Item=S>,
     FSel: Fn(&Item) -> usize,
 {
-    type SinkItem = S::SinkItem;
+    ChunkedFork {
+        selector,
+        pipelines: sinks.into_iter().map( |s| Pipe{sink: Some(s), buffer:  None} ).collect(),
+    }
+}
+
+
+pub fn fork_stream_sel_chunked<S, FSel, I>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<Vec<I>>>
+where
+    S: Stream + Send + 'static,
+    S::Item: std::iter::IntoIterator<Item=I> + Send,
+    //<S::Item as IntoIterator>::Item: Send,
+    I: Send + 'static,
+    FSel: Fn(&I) -> usize + Send + 'static,
+{
+        let mut streams = Vec::new();
+        let mut sinks = Vec::new();
+        for _i in 0..degree {
+            let (tx, rx) = channel::<Vec<I>>(2);
+            sinks.push(tx);
+            streams.push(rx);
+        }
+        let fork = chunked_fork(sinks, selector);
+
+        stream.map(|c| Vec::from_iter(c.into_iter())).forward_and_spawn(fork);
+        ParallelStream::from(streams)
+}
+
+impl<S, Item, FSel> ChunkedFork<S, FSel>
+where
+    S: Sink<SinkItem=Vec<Item>>, // + Clone,
+{
+    pub fn is_clear(&self) -> bool {
+        ! self.pipelines.iter().all(|pipe| {
+            pipe.buffer.is_none()
+        })
+    }
+
+    pub fn try_send_all(&mut self) -> Result<bool,S::SinkError> {
+        let mut all_empty = true;
+
+        for pipe in self.pipelines.iter_mut() {
+            let buffer =  pipe.buffer.take();
+            if let Some(buf) = buffer {
+                let sink = pipe.sink.as_mut().unwrap();
+                match sink.start_send(buf)? {
+                    AsyncSink::Ready => {
+                        () //pipe.buffer = None;
+                    },
+                    AsyncSink::NotReady(buf) => {
+                        pipe.buffer = Some(buf);
+                        all_empty = false;
+                    }
+                }
+
+            }
+        }
+
+        Ok(all_empty)
+    }
+}
+
+impl<I, S, FSel> Sink for ChunkedFork<S, FSel>
+where
+    //C: IntoIterator<Item=I>,
+    FSel: Fn(&I) -> usize,
+    S: Sink<SinkItem=Vec<I>>
+{
+    type SinkItem = Vec<I>;
     type SinkError = S::SinkError;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        let index = (self.selector)(&item) % self.pipelines.len();
-        let chunk_seq_no = self.seq_no + 1;
-        self.seq_no = chunk_seq_no;
-        if let Some(sink) = &mut self.pipelines[index] {
-            let buffer = &mut self.buffers[index];
-            if buffer.len() >= self.capacity {
-                self.buffers.push(Vec::with_capacity(self.capacity));
-                let buf = self.buffers.swap_remove(index);
-                sink.start_send(Chunk{
-                    items: buf,
-                    seq_no: chunk_seq_no,
-                })
-            } else {
-                buffer.push(item)
-            }
-        } else {
-            panic!("sink is already closed")
+    fn start_send(&mut self, chunk: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        if !self.try_send_all()? {
+            return Ok(AsyncSink::NotReady(chunk));
         }
+
+        let degree = self.pipelines.len();
+
+        for item in chunk {
+            let i = (self.selector)(&item) % degree;
+            if let Some(ref mut buf) = self.pipelines[i].buffer {
+                buf.push(item);
+            }else {
+                self.pipelines[i].buffer = Some(vec![item]);
+            }
+        }
+        self.try_send_all()?;
+
+        Ok(AsyncSink::Ready)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        for i in 0..self.pipelines.len() {
-            if let Some(sink) = &mut self.pipelines[i] {
-                if !self.buffers[i].empty() {
-                    self.buffers.push(Vec::new())
-                    let buf = self.buffers.swap_remove(i);
-                    TODO
-                    sink.start_send(buf)
-                }
-                try_ready!(sink.poll_complete());
-            }
-        }
 
-        Ok(Async::Ready(()))
+        let state = if self.try_send_all()? {
+            for iter_sink in self.pipelines.iter_mut() {
+                if let Some(ref mut sink) = iter_sink.sink {
+                    try_ready!(sink.poll_complete());
+                }
+            }
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        };
+
+        Ok(state)
     }
 
     fn close(&mut self) -> Poll<(), Self::SinkError> {
-        for i in 0..self.pipelines.len() {
-            if let Some(sink) = &mut self.pipelines[i] {
-                TODO
-                try_ready!(sink.close());
-                self.pipelines[i] = None;
-            }
-        }
 
-        Ok(Async::Ready(()))
+        let state = if self.try_send_all()? {
+            for iter_sink in self.pipelines.iter_mut() {
+                if let Some(ref mut sink) = iter_sink.sink {
+                    if iter_sink.buffer.is_none(){
+                        try_ready!(sink.close());
+                        iter_sink.sink = None;
+                    } else {
+                         return Ok(Async::NotReady);
+                    }
+                }
+            }
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        };
+
+        Ok(state)
     }
 }

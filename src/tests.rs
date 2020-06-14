@@ -3,7 +3,7 @@ use bytes::Bytes;
 
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::channel;
+use tokio::sync::mpsc::{Receiver, channel};
 
 use test::Bencher;
 use test::black_box;
@@ -312,16 +312,72 @@ fn shuffle_1k(b: &mut Bencher) {
     });
 }
 
+use std::collections::HashMap;
+pub type FreqTable = HashMap<Bytes, u64>;
+
+//#[inline(never)]
+pub fn count_bytes(frequency: &mut FreqTable, text: &Bytes) -> usize {
+    let mut i_start: usize = 0;
+    for i in 0..text.len() {
+        if text[i].is_ascii_whitespace() {
+            let word = text.slice(i_start, i);
+            if !word.is_empty() {
+                *frequency.entry(word).or_insert(0) += 1;
+            }
+            i_start = i + 1;
+        }
+    }
+
+    i_start
+}
 #[bench]
 fn file_io(b: &mut Bencher) {
+    use std::iter::FromIterator;
+    use crate::stream_ext::StreamChunkedExt;
     const pipe_threads:usize = 2;
     b.iter(||
     {
-        tokio::run(futures::lazy(|| {
+        use tokio::fs::{File, OpenOptions};
+        use tokio::codec::{BytesCodec, FramedRead, FramedWrite};
+        let filename = "~/dev/test_data/10M_rand_text.txt";
+        let file_future = File::open(filename);
+
+        tokio::run(file_future.map(|file| {
+            let input_stream = FramedRead::new(file, BytesCodec::new());
+            let sub_table_streams: Receiver<Vec<(Bytes, u64)>> = input_stream
+                .fork(pipe_threads)
+                .instrumented_fold(|| FreqTable::new(), |mut frequency, text| {
+                    let text = text.freeze();
+                    count_bytes(&mut frequency, &text);
+
+                    future::ok::<FreqTable, _>(frequency)
+                }, "split_and_count".to_owned())
+            .map(move |mut frequency|{
+                Vec::from_iter(frequency)
+            }).decouple(2);
+
+            let result_stream = sub_table_streams
+                //.map_err(|e| {panic!(); ()})
+                .instrumented_map_chunked(|e| e, "test".to_owned())
+                .fork_sel_chunked( |(word, _count)| word.len() , pipe_threads )
+                .instrumented_fold(|| FreqTable::new(), |mut frequency, chunk| {
+
+                    for (word, count) in chunk {
+                        *frequency.entry(word).or_insert(0) += count;
+                    }
+
+                    future::ok::<FreqTable, _>(frequency)
+                }, "merge_table".to_owned()).map(move |mut sub_table| {
+                    let freq = Vec::from_iter(sub_table.drain());
+                    //freq.sort_unstable_by_key(|&(_, a)| a); //presort seems slower
+                    freq
+                } );
+
+
             // unimplemented!();
-                future::ok(())
+                ()
             // TODO src/word_count_para_partition_shuffle_chunked.rs
-        }));
+        }).map_err(|_e| ()) );
     });
 
 }

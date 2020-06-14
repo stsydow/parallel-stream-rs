@@ -11,8 +11,9 @@ extern crate test;
 //pub mod stream_group_by;
 //mod global_context; //TODO
 mod stream_fork;
-//mod stream_fork_chunked;
 pub use crate::stream_fork::{ForkRR, ForkSel};
+mod stream_fork_chunked;
+pub use crate::stream_fork_chunked::{ChunkedFork};
 mod stream_join;
 pub use crate::stream_join::{JoinTagged, Join};
 //broken pub mod stream_shuffle;
@@ -30,7 +31,7 @@ pub use crate::instrumented_fold::InstrumentedFold;
 mod probe_stream; //TODO Tag is defined twice
 //pub use probe_stream::{Meter, Tag}
 mod stream_ext;
-pub use crate::stream_ext::StreamExt;
+pub use crate::stream_ext::{StreamExt, StreamChunkedExt};
 
 mod parallel_stream;
 pub use crate::parallel_stream::ParallelStream;

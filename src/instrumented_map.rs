@@ -76,9 +76,10 @@ pub struct InstrumentedMapChunked<S, F>
     function: F
 }
 
-pub fn instrumented_map_chunked<S, I, F, U>(stream: S, function: F, name: String) -> InstrumentedMapChunked<S, F>
-    where S: Stream<Item=Vec<I>>,
-          F: FnMut(I) -> U,
+pub fn instrumented_map_chunked<S, C, F, U>(stream: S, function: F, name: String) -> InstrumentedMapChunked<S, F>
+    where C: IntoIterator,
+          S: Stream<Item=C>,
+          F: FnMut(C::Item) -> U,
 {
     #[cfg(not(stream_profiling))]
     {let _ = &name;}
@@ -93,15 +94,18 @@ pub fn instrumented_map_chunked<S, I, F, U>(stream: S, function: F, name: String
     }
 }
 
-impl<S, I, F, U> Stream for InstrumentedMapChunked<S, F>
-    where S: Stream<Item=Vec<I>>,
-          F: FnMut(I) -> U,
+impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
+    where C: IntoIterator,
+          S: Stream<Item=C>,
+          F: FnMut(C::Item) -> U,// + Copy + 'static,
 {
     type Item = Vec<U>;
+    //type Item = std::iter::Map<C::IntoIter, &'static mut F>;
+    //type Item = std::iter::Map<C::IntoIter, F>;
     type Error = S::Error;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<Option<Vec<U>>, S::Error> {
+    fn poll(&mut self) -> Poll<Option<Self::Item>, S::Error> {
         let option = try_ready!(self.stream.poll());
         let result =  match option {
             None => {
@@ -110,12 +114,8 @@ impl<S, I, F, U> Stream for InstrumentedMapChunked<S, F>
             },
             Some(chunk) => {
                 let start = Instant::now();
-                let chunk_len = chunk.len();
-                let mut out_chunk = Vec::with_capacity(chunk_len);
-                for item in chunk {
-                    out_chunk.push((self.function)(item))
-                }
-                self.hist.sample_now_chunk(chunk_len, &start);
+                out_chunk = chunk.into_iter().map(&mut self.function).collect();
+                self.hist.sample_now_chunk(out_chunk.len(), &start);
                 Some(out_chunk)
             }
         };
@@ -123,15 +123,11 @@ impl<S, I, F, U> Stream for InstrumentedMapChunked<S, F>
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<Option<Vec<U>>, S::Error> {
+    fn poll(&mut self) -> Poll<Option<Self::Item>, S::Error> {
         let option = try_ready!(self.stream.poll());
         let result = option.map(|chunk|
             {
-                let mut out_chunk = Vec::with_capacity(chunk.len());
-                for item in chunk {
-                    out_chunk.push((self.function)(item))
-                }
-                out_chunk
+                chunk.into_iter().map(&mut self.function).collect()
             });
 
         Ok(Async::Ready(result))

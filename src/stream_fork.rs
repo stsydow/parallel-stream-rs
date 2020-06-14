@@ -30,7 +30,7 @@ S: Send,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<S::Item>(1);
+            let (tx, rx) = channel::<S::Item>(2);
             sinks.push(tx);
             streams.push(rx);
         }
@@ -84,17 +84,12 @@ pub struct ForkSel<S, FSel> {
     pipelines: Vec<Option<S>>,
 }
 
-pub fn fork_sel<S:Sink, FSel>(sinks: Vec<S>, selector: FSel) -> ForkSel<S, FSel>
+pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
+    where Si: IntoIterator<Item=S>,
 {
-    let mut pipelines = Vec::with_capacity(sinks.len());
-    for s in sinks {
-        pipelines.push(Some(s));
-    }
-    assert!(!pipelines.is_empty());
-
     ForkSel {
         selector,
-        pipelines
+        pipelines: sinks.into_iter().map( |s| Some(s) ).collect(),
     }
 }
 
@@ -109,7 +104,7 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<S::Item>(1);
+            let (tx, rx) = channel::<S::Item>(2);
             sinks.push(tx);
             streams.push(rx);
         }

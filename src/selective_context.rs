@@ -143,12 +143,13 @@ pub struct SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
 }
 
 
-impl<Event, R, Key, Ctx, InStream, FInit, FSel, FWork> SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
-    where Key: Ord + Hash,
-          InStream:Stream<Item=Vec<Event>>,
+impl<Chunk, R, Key, Ctx, InStream, FInit, FSel, FWork> SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
+    where Chunk: IntoIterator,
+          Key: Ord + Hash,
+          InStream:Stream<Item=Chunk>,
           FInit: Fn(&Key) -> Ctx,
-          FSel: Fn(&Event) -> Key,
-          FWork:Fn(&mut Ctx, &Event) -> R
+          FSel: Fn(&Chunk::Item) -> Key,
+          FWork:FnMut(&mut Ctx, Chunk::Item) -> R
 {
     pub fn new(input:InStream, ctx_builder: FInit, selector: FSel, work: FWork, name: String) -> Self
     {
@@ -168,10 +169,10 @@ impl<Event, R, Key, Ctx, InStream, FInit, FSel, FWork> SelectiveContextBuffered<
         }
     }
 
-    fn apply(&mut self, event: &Event) -> R {
-        let key = (self.selector)(event);
+    fn apply(&mut self, event: Chunk::Item) -> R {
+        let key = (self.selector)(&event);
 
-        let work_fn = &self.work;
+        let work_fn = &mut self.work;
         let context = match self.context_map.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
@@ -179,19 +180,20 @@ impl<Event, R, Key, Ctx, InStream, FInit, FSel, FWork> SelectiveContextBuffered<
                 entry.insert(inital_ctx)
             }
         };
-        work_fn(context, &event)
+        work_fn(context, event)
 
         //TODO decide / implement context termination (via work()'s Return Type? An extra function? Timeout registration? )
     }
 }
 
-pub fn selective_context_buffered<Event, R, Key, Ctx, InStream, CtxInit, FSel, FWork> (input:InStream, ctx_builder: CtxInit, selector: FSel, work: FWork, name: String) -> SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
+pub fn selective_context_buffered<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> (input:InStream, ctx_builder: CtxInit, selector: FSel, work: FWork, name: String) -> SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
     where //Ctx:Context<Event=Event, Result=R>,
-        InStream:Stream<Item=Vec<Event>>,
+        Chunk: IntoIterator,
+        InStream:Stream<Item=Chunk>,
         Key: Ord + Hash,
         CtxInit:Fn(&Key) -> Ctx,
-        FSel: Fn(&Event) -> Key,
-        FWork:Fn(&mut Ctx, &Event) -> R
+        FSel: Fn(&Chunk::Item) -> Key,
+        FWork:FnMut(&mut Ctx, Chunk::Item) -> R
 {
     #[cfg(not(stream_profiling))]
     {let _ = &name;}
@@ -209,13 +211,14 @@ pub fn selective_context_buffered<Event, R, Key, Ctx, InStream, CtxInit, FSel, F
 }
 
 
-impl<Event, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
+impl<Chunk, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
     where //Ctx:Context<Event=Event, Result=R>,
-        InStream:Stream<Item=Vec<Event>, Error=Error>,
+        Chunk: IntoIterator,
+        InStream: Stream<Item=Chunk, Error=Error>,
         Key: Ord + Hash,
         CtxInit:Fn(&Key) -> Ctx,
-        FSel: Fn(&Event) -> Key,
-        FWork:Fn(&mut Ctx, &Event) -> R
+        FSel: Fn(&Chunk::Item) -> Key,
+        FWork:FnMut(&mut Ctx, Chunk::Item) -> R
 {
     type Item = Vec<R>;
     type Error = Error;
@@ -224,13 +227,12 @@ impl<Event, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for Selec
         let async_chunk = try_ready!(self.input.poll());
 
         let result = match async_chunk {
-            Some(ref chunk)=> {
+            Some(chunk)=> {
 
                 #[cfg(stream_profiling)]
                 let start = Instant::now();
 
-                use std::iter::FromIterator;
-                let result_chunk = Vec::from_iter(chunk.iter().map(|e| self.apply(e)));
+                let result_chunk = chunk.into_iter().map(|e| self.apply(e)).collect();
                 /*
                 let mut result_chunk = Vec::with_capacity(chunk.len());
 

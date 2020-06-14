@@ -3,7 +3,7 @@ use std::hash::Hash;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
 
-use crate::{StreamExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
+use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 //TODO see https://github.com/async-rs/parallel-stream/
 
@@ -256,7 +256,7 @@ impl<S: Stream, I> ParallelStream<S>
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx + Copy,
         FSel: Fn(&I) -> Key + Copy,
-        FWork: Fn(&mut Ctx, &I) -> R + Copy,
+        FWork: FnMut(&mut Ctx, I) -> R + Copy,
         S: Sized,
     {
         self.add_stage(|s| s.selective_context_buffered(ctx_builder, selector, work, name.clone()))
