@@ -43,7 +43,7 @@ pub trait StreamExt: Stream {
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx,
         FSel: Fn(&Self::Item) -> Key,
-        FWork: Fn(&mut Ctx, &Self::Item) -> R,
+        FWork: FnMut(&mut Ctx, Self::Item) -> R,
         Self: Sized,
     {
         selective_context::selective_context(self, ctx_builder, selector, work, name)

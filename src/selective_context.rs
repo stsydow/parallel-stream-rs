@@ -26,7 +26,7 @@ where
     InStream: Stream,
     FInit: Fn(&Key) -> Ctx,
     FSel: Fn(&InStream::Item) -> Key,
-    FWork: Fn(&mut Ctx, &InStream::Item) -> R,
+    FWork: FnMut(&mut Ctx, InStream::Item) -> R,
 {
     pub fn new(input: InStream, ctx_builder: FInit, selector: FSel, work: FWork, name: String) -> Self {
         #[cfg(not(stream_profiling))]
@@ -45,10 +45,10 @@ where
         }
     }
 
-    fn apply(&mut self, event: &InStream::Item) -> R {
-        let key = (self.selector)(event);
+    fn apply(&mut self, event: InStream::Item) -> R {
+        let key = (self.selector)(&event);
 
-        let work_fn = &self.work;
+        //let work_fn = &mut self.work;
         let context = match self.context_map.entry(key) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {
@@ -56,7 +56,8 @@ where
                 entry.insert(inital_ctx)
             }
         };
-        work_fn(context, &event)
+        //work_fn(context, event)
+        (self.work)(context, event)
 
         //TODO decide / implement context termination (via work()'s Return Type? An extra function? Timeout registration? )
     }
@@ -74,7 +75,7 @@ where
     Key: Ord + Hash,
     CtxInit: Fn(&Key) -> Ctx,
     FSel: Fn(&InStream::Item) -> Key,
-    FWork: Fn(&mut Ctx, &InStream::Item) -> R,
+    FWork: FnMut(&mut Ctx, InStream::Item) -> R,
 {
     #[cfg(not(stream_profiling))]
     {let _ = &name;}
@@ -98,7 +99,7 @@ where
     Key: Ord + Hash,
     CtxInit: Fn(&Key) -> Ctx,
     FSel: Fn(&InStream::Item) -> Key,
-    FWork: Fn(&mut Ctx, &InStream::Item) -> R,
+    FWork: FnMut(&mut Ctx, InStream::Item) -> R,
 {
     type Item = R;
     type Error = InStream::Error;
@@ -110,7 +111,7 @@ where
                 #[cfg(stream_profiling)]
                 let start = Instant::now();
 
-                let result = self.apply(&event);
+                let result = self.apply(event);
 
                 #[cfg(stream_profiling)]
                 self.hist.sample_now(&start);

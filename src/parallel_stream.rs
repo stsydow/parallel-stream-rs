@@ -202,7 +202,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx + Copy,
         FSel: Fn(&S::Item) -> Key + Copy,
-        FWork: Fn(&mut Ctx, &S::Item) -> R + Copy,
+        FWork: Fn(&mut Ctx, S::Item) -> R + Copy,
     {
         self.add_stage(|s| s.selective_context(ctx_builder, selector, work, name.clone()))
     }
