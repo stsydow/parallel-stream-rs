@@ -260,7 +260,7 @@ fn fork_join_unorderd_1k(b: &mut Bencher) {
         tokio::run(futures::lazy(|| {
             let mut exec = DefaultExecutor::current();
             let pipeline = dummy_stream()
-                .fork(THREADS, &mut exec)
+                .fork(THREADS, 2, &mut exec)
                 .join_unordered(2*THREADS, &mut exec);
 
             let pipeline_task = pipeline.for_each(|_item| {
@@ -286,9 +286,9 @@ fn shuffle_1k(b: &mut Bencher) {
         tokio::run(futures::lazy(|| {
             let mut exec = DefaultExecutor::current();
             let pipeline = dummy_stream()
-                .fork(THREADS, &mut exec)
-                .shuffle_unordered(|i|{i * 7}, THREADS, &mut exec)
-                .join_unordered(THREADS, &mut exec);
+                .fork(THREADS, 2, &mut exec)
+                .shuffle_unordered(|i|{i * 7}, THREADS, 2, &mut exec)
+                .join_unordered(2*THREADS, &mut exec);
 
             let pipeline_task = pipeline
             /*
@@ -349,7 +349,7 @@ fn file_io(b: &mut Bencher) {
             let mut exec = DefaultExecutor::current();
             let input_stream = FramedRead::new(file, BytesCodec::new());
             let sub_table_streams: Receiver<Vec<(Bytes, u64)>> = input_stream
-                .fork(THREADS, &mut exec)
+                .fork(THREADS, 2, &mut exec)
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, text| {
                     let text = text.freeze();
                     count_bytes(&mut frequency, &text);
@@ -363,7 +363,7 @@ fn file_io(b: &mut Bencher) {
             let result_stream = sub_table_streams
                 //.map_err(|e| {panic!(); ()})
                 .instrumented_map_chunked(|e| e, "test".to_owned())
-                .fork_sel_chunked( |(word, _count)| word.len() , THREADS, &mut exec )
+                .fork_sel_chunked( |(word, _count)| word.len() , THREADS, 2, &mut exec )
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, chunk| {
 
                     for (word, count) in chunk {

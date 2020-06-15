@@ -23,7 +23,7 @@ pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
     }
 }
 
-pub fn fork_stream<S, E: Executor>(stream:S, degree:usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream<S, E: Executor>(stream:S, degree:usize, buf_size: usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S::Error: std::fmt::Debug,
@@ -32,7 +32,7 @@ S: Send,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<S::Item>(2);
+            let (tx, rx) = channel::<S::Item>(buf_size);
             sinks.push(tx);
             streams.push(rx);
         }
@@ -95,7 +95,7 @@ pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
     }
 }
 
-pub fn fork_stream_sel<S, FSel, E: Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream_sel<S, FSel, E: Executor>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S::Error: std::fmt::Debug,
@@ -105,7 +105,7 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<S::Item>(2);
+            let (tx, rx) = channel::<S::Item>(buf_size);
             sinks.push(tx);
             streams.push(rx);
         }

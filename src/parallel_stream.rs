@@ -71,7 +71,7 @@ where
 
     }
 
-    pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
+    pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
         I: Send,
@@ -86,7 +86,7 @@ where
         }
 
         for input in self.streams {
-            let splits = input.fork_sel( move |t| (selector)(t.as_ref()), degree, exec);
+            let splits = input.fork_sel( move |t| (selector)(t.as_ref()), degree, buf_size, exec);
             // TODO here it gets a other Tag
 
 
@@ -118,7 +118,7 @@ where
         self.add_stage(|s| s.decouple(buf_size, exec))
     }
 
-        pub fn join_unordered<E:Executor>(self, buf_size: usize, exec: &mut E) ->  Receiver<S::Item> {
+    pub fn join_unordered<E:Executor>(self, buf_size: usize, exec: &mut E) ->  Receiver<S::Item> {
 
         let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
@@ -128,7 +128,7 @@ where
         join_rx
     }
 
-    pub fn shuffle_unordered<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
+    pub fn shuffle_unordered<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
         ParallelStream<Receiver<S::Item>>
     where
         S: Send + 'static,
@@ -142,7 +142,7 @@ where
         }
 
         for input in self.streams {
-            let splits = input.fork_sel(selector, degree, exec);
+            let splits = input.fork_sel(selector, degree, buf_size, exec);
 
             let mut i = 0;
             for s in splits.streams {
@@ -151,7 +151,8 @@ where
             }
         }
 
-        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter().map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree, exec)).collect();
+        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter()
+            .map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree, exec)).collect();
 
         ParallelStream::from(joins)
     }
@@ -259,7 +260,7 @@ impl<S: Stream, C> ParallelStream<S>
     }
     */
 
-    pub fn shuffle_unordered_chunked<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
+    pub fn shuffle_unordered_chunked<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
         ParallelStream<Receiver<Vec<C::Item>>>
     where
         C::Item: Send + 'static,
@@ -273,7 +274,7 @@ impl<S: Stream, C> ParallelStream<S>
         }
 
         for input in self.streams {
-            let splits = input.fork_sel_chunked(selector, degree, exec);
+            let splits = input.fork_sel_chunked(selector, degree, buf_size, exec);
 
             let mut i = 0;
             for s in splits.streams {
