@@ -33,19 +33,18 @@ where
 }
 
 
-pub fn fork_stream_sel_chunked<S, FSel, I, E:Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<Vec<I>>>
+pub fn fork_stream_sel_chunked<S, FSel, C, E:Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<Vec<C::Item>>>
 where
-    S: Stream + Send + 'static,
-    S::Item: std::iter::IntoIterator<Item=I> + Send,
+    C: IntoIterator,
+    S: Stream<Item=C> + Send + 'static,
     S::Error: std::fmt::Debug,
-    //<S::Item as IntoIterator>::Item: Send,
-    I: Send + 'static,
-    FSel: Fn(&I) -> usize + Send + 'static,
+    C::Item: Send + 'static,
+    FSel: Fn(&C::Item) -> usize + Send + 'static,
 {
         let mut streams = Vec::new();
         let mut sinks = Vec::new();
         for _i in 0..degree {
-            let (tx, rx) = channel::<Vec<I>>(2);
+            let (tx, rx) = channel::<Vec<C::Item>>(2);
             sinks.push(tx);
             streams.push(rx);
         }

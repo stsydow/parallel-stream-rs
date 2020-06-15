@@ -7,7 +7,7 @@ use crate::stream_fork_chunked;
 use crate::tagged_stream;
 use crate::{TaggedStream, ParallelStream};
 use tokio::prelude::*;
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Receiver, channel};
 use tokio::executor::Executor;
 
 use std::hash::Hash;
@@ -15,7 +15,6 @@ use std::hash::Hash;
 impl<T: ?Sized> StreamExt for T where T: Stream {}
 
 pub trait StreamExt: Stream {
-    // Instrumentation
     fn instrumented_map<U, F>(self, f: F, name: String) -> InstrumentedMap<Self, F>
         where F: FnMut(Self::Item) -> U,
               Self: Sized
@@ -33,8 +32,6 @@ pub trait StreamExt: Stream {
         instrumented_fold::instrumented_fold(self, f, init, name)
     }
 
-
-    //TODO instrument ; add name
     fn selective_context<R, Key, Ctx, CtxInit, FSel, FWork>(
         self,
         ctx_builder: CtxInit,
@@ -43,7 +40,6 @@ pub trait StreamExt: Stream {
         name: String
     ) -> SelectiveContext<Key, Ctx, Self, CtxInit, FSel, FWork>
     where
-        //Ctx:Context<Event=Event, Result=R>,
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx,
         FSel: Fn(&Self::Item) -> Key,
@@ -96,7 +92,7 @@ pub trait StreamExt: Stream {
                 panic!("{:#?}", e)
             });
 
-            exec.spawn(Box::new(task));
+            exec.spawn(Box::new(task)).expect("can't spawn task");
             //tokio::spawn(task);
     }
 
@@ -124,8 +120,6 @@ pub trait StreamExt: Stream {
         probe_stream::Tag::new(self)
     }
 
-    // Chunks
-    // from ../src/util.rs
     // map() filer() for_each() ...
 }
 
@@ -138,7 +132,6 @@ pub trait StreamChunkedExt: Stream {
               Self:Stream<Item=C>,
               F: FnMut( C::Item) -> U,
               Self: Sized ,
-              //<Self as futures::stream::Stream>::Item: IntoIterator
     {
         instrumented_map::instrumented_map_chunked(self, f, name)
     }
@@ -151,7 +144,6 @@ pub trait StreamChunkedExt: Stream {
         name: String
     ) -> SelectiveContextBuffered<Key, Ctx, Self, CtxInit, FSel, FWork>
     where
-        //Ctx:Context<Event=Event, Result=R>,
         Chunk: IntoIterator,
         Self:Stream<Item=Chunk>,
         Key: Ord + Hash,
@@ -169,7 +161,6 @@ pub trait StreamChunkedExt: Stream {
             Chunk::Item: Send + 'static,
             FSel: Fn(&Chunk::Item) -> usize + Copy + Send + 'static,
             Self: Stream<Item=Chunk> + Sized + Send + 'static,
-            Self::Item: Send,
             Self::Error: std::fmt::Debug,
     {
         stream_fork_chunked::fork_stream_sel_chunked(self, selector, degree, exec)

@@ -3,7 +3,7 @@ use std::hash::Hash;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::executor::Executor;
-use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
+use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked};
 use crate::stream_join::join_tagged;
 //TODO see https://github.com/async-rs/parallel-stream/
 
@@ -71,30 +71,7 @@ where
 
     }
 
-    //TODO map chunkedmap fold
-    /*
-    fn selective_context_buffered<Event, R, Key, Ctx, CtxInit, FSel, FWork>(
-        self,
-        ctx_builder: CtxInit,
-        selector: FSel,
-        work: FWork,
-        name: String
-    ) -> selective_context::SelectiveContextBuffered<Key, Ctx, Self, CtxInit, FSel, FWork>
-    where
-        //Ctx:Context<Event=Event, Result=R>,
-        Key: Ord + Hash,
-        CtxInit: Fn(&Key) -> Ctx,
-        FSel: Fn(&Event) -> Key,
-        FWork: Fn(&mut Ctx, &Event) -> R,
-        Self: Sized + Stream<Item=Tag<Vec<Event>>>,
-    {
-        selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
-    }
-    */
-
     pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
-        // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
-        // TODO really should be:
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
         I: Send,
@@ -152,8 +129,6 @@ where
     }
 
     pub fn shuffle_unordered<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
-        // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
-        // TODO really should be:
         ParallelStream<Receiver<S::Item>>
     where
         S: Send + 'static,
@@ -168,8 +143,6 @@ where
 
         for input in self.streams {
             let splits = input.fork_sel(selector, degree, exec);
-            // TODO here it gets a other Tag
-
 
             let mut i = 0;
             for s in splits.streams {
@@ -235,13 +208,15 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
     }
 }
 
-impl<S: Stream, I> ParallelStream<S>
-    where S:Stream<Item=Vec<I>>,
+impl<S: Stream, C> ParallelStream<S>
+    where  C: IntoIterator,
+          S:Stream<Item=C>,
+          S::Error: std::fmt::Debug,
 {
 
     pub fn instrumented_map_chunked<U, F>(self, f: F, name:String)
         -> ParallelStream<InstrumentedMapChunked<S, F>>
-        where F: FnMut(I) -> U + Copy,
+        where F: Fn(C::Item) -> U + Copy,
     {
         self.add_stage(|s| s.instrumented_map_chunked(f, name.clone()))
     }
@@ -257,10 +232,61 @@ impl<S: Stream, I> ParallelStream<S>
     where
         Key: Ord + Hash,
         CtxInit: Fn(&Key) -> Ctx + Copy,
-        FSel: Fn(&I) -> Key + Copy,
-        FWork: FnMut(&mut Ctx, I) -> R + Copy,
+        FSel: Fn(&C::Item) -> Key + Copy,
+        FWork: Fn(&mut Ctx, C::Item) -> R + Copy,
         S: Sized,
     {
         self.add_stage(|s| s.selective_context_buffered(ctx_builder, selector, work, name.clone()))
+    }
+
+    /* TODO
+    pub fn instrumented_fold_chunked<Fut, T, F, Finit>(self, init: Finit, f:F, name: String) ->
+        impl Stream<Item=T, Error=S::Error>
+        //futures::stream::BufferUnordered< futures::stream::IterOk< ... InstrumentedFold<S, F, Fut, T>, S::Error>>
+        where S: 'static,
+              Finit: Fn() -> T + Copy + 'static,
+              F: FnMut(T, C::Item) -> Fut + Copy + 'static,
+              Fut: IntoFuture<Item = T>,
+              S::Error: From<Fut::Error>,
+              //Self: Sized,
+
+    {
+        let degree = self.streams.len();
+        futures::stream::iter_ok(self.streams).map(move |input|{
+            unimplemented!();
+            //input.instrumented_fold_chunked(init(), f, name.clone())
+        }).buffer_unordered(degree)
+    }
+    */
+
+    pub fn shuffle_unordered_chunked<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
+        ParallelStream<Receiver<Vec<C::Item>>>
+    where
+        C::Item: Send + 'static,
+        S: Send + 'static,
+        FSel: Fn(&C::Item) -> usize + Copy + Send + 'static,
+    {
+        let input_degree = self.streams.len();
+        let mut joins_streams = Vec::with_capacity(degree);
+        for _i in 0 .. degree {
+            joins_streams.push( Vec::with_capacity(input_degree))
+        }
+
+        for input in self.streams {
+            let splits = input.fork_sel_chunked(selector, degree, exec);
+
+            let mut i = 0;
+            for s in splits.streams {
+                joins_streams[i].push(s);
+                i += 1;
+            }
+        }
+
+        let joins: Vec<Receiver<Vec<C::Item>>> = joins_streams.into_iter()
+            .map( |join_st| ParallelStream::from(join_st)
+            .join_unordered(input_degree, exec))
+            .collect();
+
+        ParallelStream::from(joins)
     }
 }

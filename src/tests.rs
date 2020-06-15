@@ -14,6 +14,7 @@ use crate::{StreamExt};
 
 const BLOCK_COUNT:usize = 1_000;
 
+const THREADS:usize = 4;
 /*
 const BLOCK_SIZE:usize = 1<<12; //4k
 static PAYLOAD:[u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
@@ -209,14 +210,13 @@ fn channel_buf2_chunk10_1k(b: &mut Bencher) {
 #[bench]
 fn fork_join_1k(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
-    let pipe_threads:usize = 2;
     b.iter(|| {
 
     let (fork, join) = {
         let mut senders = Vec::new();
         //let mut join = Join::new();
-        let (out_tx, out_rx) = channel::<Message>(pipe_threads+1);
-        for _i in 0..pipe_threads {
+        let (out_tx, out_rx) = channel::<Message>(THREADS + 1);
+        for _i in 0 .. THREADS {
             let (in_tx, in_rx) = channel::<Message>(2);
 
             senders.push(in_tx);
@@ -256,12 +256,12 @@ fn fork_join_1k(b: &mut Bencher) {
 
 #[bench]
 fn fork_join_unorderd_1k(b: &mut Bencher) {
-    //let mut runtime = Runtime::new().expect("can not start runtime");
-    const pipe_threads:usize = 2;
     b.iter(|| {
         tokio::run(futures::lazy(|| {
             let mut exec = DefaultExecutor::current();
-            let pipeline = dummy_stream().fork(pipe_threads, &mut exec).join_unordered(2*pipe_threads, &mut exec);
+            let pipeline = dummy_stream()
+                .fork(THREADS, &mut exec)
+                .join_unordered(2*THREADS, &mut exec);
 
             let pipeline_task = pipeline.for_each(|_item| {
                 Ok(())
@@ -282,13 +282,13 @@ fn fork_join_unorderd_1k(b: &mut Bencher) {
 #[bench]
 fn shuffle_1k(b: &mut Bencher) {
     //let mut runtime = Runtime::new().expect("can not start runtime");
-    const pipe_threads:usize = 2;
     b.iter(|| {
         tokio::run(futures::lazy(|| {
             let mut exec = DefaultExecutor::current();
-            let pipeline = dummy_stream().fork(pipe_threads, &mut exec)
-                .shuffle_unordered(|i|{i * 7}, pipe_threads, &mut exec)
-                .join_unordered(pipe_threads, &mut exec);
+            let pipeline = dummy_stream()
+                .fork(THREADS, &mut exec)
+                .shuffle_unordered(|i|{i * 7}, THREADS, &mut exec)
+                .join_unordered(THREADS, &mut exec);
 
             let pipeline_task = pipeline
             /*
@@ -338,7 +338,6 @@ pub fn count_bytes(frequency: &mut FreqTable, text: &Bytes) -> usize {
 fn file_io(b: &mut Bencher) {
     use std::iter::FromIterator;
     use crate::stream_ext::StreamChunkedExt;
-    const pipe_threads:usize = 2;
     b.iter(||
     {
         use tokio::fs::{File, OpenOptions};
@@ -350,21 +349,21 @@ fn file_io(b: &mut Bencher) {
             let mut exec = DefaultExecutor::current();
             let input_stream = FramedRead::new(file, BytesCodec::new());
             let sub_table_streams: Receiver<Vec<(Bytes, u64)>> = input_stream
-                .fork(pipe_threads, &mut exec)
+                .fork(THREADS, &mut exec)
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, text| {
                     let text = text.freeze();
                     count_bytes(&mut frequency, &text);
 
                     future::ok::<FreqTable, _>(frequency)
                 }, "split_and_count".to_owned())
-            .map(move |mut frequency|{
+            .map(|frequency|{
                 Vec::from_iter(frequency)
             }).decouple(2, &mut exec);
 
             let result_stream = sub_table_streams
                 //.map_err(|e| {panic!(); ()})
                 .instrumented_map_chunked(|e| e, "test".to_owned())
-                .fork_sel_chunked( |(word, _count)| word.len() , pipe_threads, &mut exec )
+                .fork_sel_chunked( |(word, _count)| word.len() , THREADS, &mut exec )
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, chunk| {
 
                     for (word, count) in chunk {

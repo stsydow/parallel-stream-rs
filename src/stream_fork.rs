@@ -1,4 +1,4 @@
-use futures::{try_ready, Async, Poll, Future, Sink, Stream, StartSend};
+use futures::{try_ready, Async, Poll, Sink, Stream, StartSend};
 use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
 use tokio::executor::Executor;
@@ -95,8 +95,6 @@ pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
     }
 }
 
-//TODO tag -> fork_stream_sel -> tag
-//TODO raw -> fork_stream_sel -> raw
 pub fn fork_stream_sel<S, FSel, E: Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
