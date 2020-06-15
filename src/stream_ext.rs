@@ -8,6 +8,7 @@ use crate::tagged_stream;
 use crate::{TaggedStream, ParallelStream};
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::executor::Executor;
 
 use std::hash::Hash;
 
@@ -58,26 +59,26 @@ pub trait StreamExt: Stream {
         tagged_stream::tagged_stream(self)
     }
 
-    fn fork(self, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork<E:Executor>(self, degree: usize, exec: &mut E) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             Self::Error: std::fmt::Debug,
             Self: Sized + Send + 'static,
     {
-        stream_fork::fork_stream(self, degree)
+        stream_fork::fork_stream(self, degree, exec)
     }
 
-    fn fork_sel<FSel>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork_sel<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             Self::Error: std::fmt::Debug,
             FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
             Self: Sized + Send + 'static,
     {
-        stream_fork::fork_stream_sel(self, selector, degree)
+        stream_fork::fork_stream_sel(self, selector, degree, exec)
     }
 
-    fn forward_and_spawn<SOut>(self, sink:SOut)
+    fn forward_and_spawn<SOut, E:Executor>(self, sink:SOut, exec: &mut E)
         where
             SOut: Sink<SinkItem=Self::Item> + Send + 'static,
             SOut::SinkError: std::fmt::Debug,
@@ -87,8 +88,7 @@ pub trait StreamExt: Stream {
     {
         let task = self
             .forward(sink.sink_map_err(|e| {
-                eprintln!("decouple in send error:{:#?}", e);
-                panic!()
+                panic!("send error:{:#?}", e)
             }))
             .and_then(|(_in, tx)| tx.flush() )
             .map(|_tx| () )
@@ -96,18 +96,18 @@ pub trait StreamExt: Stream {
                 panic!("{:#?}", e)
             });
 
-        tokio::spawn(task);
-
+            exec.spawn(Box::new(task));
+            //tokio::spawn(task);
     }
 
-    fn decouple(self, buf_size: usize) -> Receiver<Self::Item>
+    fn decouple<E:Executor>(self, buf_size: usize, exec: &mut E) -> Receiver<Self::Item>
         where Self::Item: Send,
             Self::Error: std::fmt::Debug,
             Self: Sized + Send + 'static,
     {
         let (tx, rx) = channel::<Self::Item>(buf_size);
 
-        self.forward_and_spawn(tx);
+        self.forward_and_spawn(tx, exec);
 
         rx
     }
@@ -163,7 +163,7 @@ pub trait StreamChunkedExt: Stream {
         selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
-    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize) -> ParallelStream<tokio::sync::mpsc::Receiver<Vec<Chunk::Item>>>
+    fn fork_sel_chunked<FSel, Chunk, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) -> ParallelStream<tokio::sync::mpsc::Receiver<Vec<Chunk::Item>>>
         where
             Chunk: IntoIterator,
             Chunk::Item: Send + 'static,
@@ -172,6 +172,6 @@ pub trait StreamChunkedExt: Stream {
             Self::Item: Send,
             Self::Error: std::fmt::Debug,
     {
-        stream_fork_chunked::fork_stream_sel_chunked(self, selector, degree)
+        stream_fork_chunked::fork_stream_sel_chunked(self, selector, degree, exec)
     }
 }

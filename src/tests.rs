@@ -4,6 +4,7 @@ use bytes::Bytes;
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{Receiver, channel};
+use tokio::executor::DefaultExecutor;
 
 use test::Bencher;
 use test::black_box;
@@ -259,7 +260,8 @@ fn fork_join_unorderd_1k(b: &mut Bencher) {
     const pipe_threads:usize = 2;
     b.iter(|| {
         tokio::run(futures::lazy(|| {
-            let pipeline = dummy_stream().fork(pipe_threads).join_unordered(2*pipe_threads);
+            let mut exec = DefaultExecutor::current();
+            let pipeline = dummy_stream().fork(pipe_threads, &mut exec).join_unordered(2*pipe_threads, &mut exec);
 
             let pipeline_task = pipeline.for_each(|_item| {
                 Ok(())
@@ -283,8 +285,10 @@ fn shuffle_1k(b: &mut Bencher) {
     const pipe_threads:usize = 2;
     b.iter(|| {
         tokio::run(futures::lazy(|| {
-            let pipeline = dummy_stream().fork(pipe_threads)
-                .shuffle_unordered(|i|{i * 7}, pipe_threads).join_unordered(pipe_threads);
+            let mut exec = DefaultExecutor::current();
+            let pipeline = dummy_stream().fork(pipe_threads, &mut exec)
+                .shuffle_unordered(|i|{i * 7}, pipe_threads, &mut exec)
+                .join_unordered(pipe_threads, &mut exec);
 
             let pipeline_task = pipeline
             /*
@@ -343,9 +347,10 @@ fn file_io(b: &mut Bencher) {
         let file_future = File::open(filename);
 
         tokio::run(file_future.map(|file| {
+            let mut exec = DefaultExecutor::current();
             let input_stream = FramedRead::new(file, BytesCodec::new());
             let sub_table_streams: Receiver<Vec<(Bytes, u64)>> = input_stream
-                .fork(pipe_threads)
+                .fork(pipe_threads, &mut exec)
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, text| {
                     let text = text.freeze();
                     count_bytes(&mut frequency, &text);
@@ -354,12 +359,12 @@ fn file_io(b: &mut Bencher) {
                 }, "split_and_count".to_owned())
             .map(move |mut frequency|{
                 Vec::from_iter(frequency)
-            }).decouple(2);
+            }).decouple(2, &mut exec);
 
             let result_stream = sub_table_streams
                 //.map_err(|e| {panic!(); ()})
                 .instrumented_map_chunked(|e| e, "test".to_owned())
-                .fork_sel_chunked( |(word, _count)| word.len() , pipe_threads )
+                .fork_sel_chunked( |(word, _count)| word.len() , pipe_threads, &mut exec )
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, chunk| {
 
                     for (word, count) in chunk {

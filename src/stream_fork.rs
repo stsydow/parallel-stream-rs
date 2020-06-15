@@ -1,6 +1,7 @@
 use futures::{try_ready, Async, Poll, Future, Sink, Stream, StartSend};
 use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
+use tokio::executor::Executor;
 
 use crate::{ParallelStream, StreamExt};
 
@@ -22,7 +23,7 @@ pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
     }
 }
 
-pub fn fork_stream<S>(stream:S, degree:usize) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream<S, E: Executor>(stream:S, degree:usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S::Error: std::fmt::Debug,
@@ -37,7 +38,7 @@ S: Send,
         }
         let fork = fork_rr(sinks);
 
-        stream.forward_and_spawn(fork);
+        stream.forward_and_spawn(fork, exec);
 
         ParallelStream::from(streams)
 }
@@ -96,7 +97,7 @@ pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
 
 //TODO tag -> fork_stream_sel -> tag
 //TODO raw -> fork_stream_sel -> raw
-pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream_sel<S, FSel, E: Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S::Error: std::fmt::Debug,
@@ -112,7 +113,7 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
         }
         let fork = fork_sel(sinks, selector);
 
-        stream.forward_and_spawn(fork);
+        stream.forward_and_spawn(fork, exec);
 
         ParallelStream::from(streams)
 }

@@ -1,6 +1,7 @@
 use futures::{try_ready, Stream, Async, AsyncSink, Poll, Sink, StartSend};
 
 use tokio::sync::mpsc::{channel, Receiver};
+use tokio::executor::Executor;
 use crate::{ParallelStream, StreamExt};
 use std::iter::FromIterator;
 
@@ -32,7 +33,7 @@ where
 }
 
 
-pub fn fork_stream_sel_chunked<S, FSel, I>(stream:S, selector: FSel, degree:usize) -> ParallelStream<Receiver<Vec<I>>>
+pub fn fork_stream_sel_chunked<S, FSel, I, E:Executor>(stream:S, selector: FSel, degree:usize, exec: &mut E) -> ParallelStream<Receiver<Vec<I>>>
 where
     S: Stream + Send + 'static,
     S::Item: std::iter::IntoIterator<Item=I> + Send,
@@ -50,7 +51,7 @@ where
         }
         let fork = chunked_fork(sinks, selector);
 
-        stream.map(|c| Vec::from_iter(c.into_iter())).forward_and_spawn(fork);
+        stream.map(|c| Vec::from_iter(c.into_iter())).forward_and_spawn(fork, exec);
         ParallelStream::from(streams)
 }
 

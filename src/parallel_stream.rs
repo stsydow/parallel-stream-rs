@@ -2,7 +2,7 @@
 use std::hash::Hash;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
-
+use tokio::executor::Executor;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 //TODO see https://github.com/async-rs/parallel-stream/
@@ -92,7 +92,7 @@ where
     }
     */
 
-    pub fn shuffle_tagged<FSel>(self, selector: FSel, degree: usize) ->
+    pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
         // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
         // TODO really should be:
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
@@ -109,7 +109,7 @@ where
         }
 
         for input in self.streams {
-            let splits = input.fork_sel( move |t| (selector)(t.as_ref()), degree);
+            let splits = input.fork_sel( move |t| (selector)(t.as_ref()), degree, exec);
             // TODO here it gets a other Tag
 
 
@@ -137,21 +137,21 @@ where
     S::Error: std::fmt::Debug,
 {
 
-    pub fn decouple(self, buf_size: usize) ->  ParallelStream<Receiver<S::Item>> {
-        self.add_stage(|s| s.decouple(buf_size))
+    pub fn decouple<E:Executor>(self, buf_size: usize, exec: &mut E) ->  ParallelStream<Receiver<S::Item>> {
+        self.add_stage(|s| s.decouple(buf_size, exec))
     }
 
-    pub fn join_unordered(self, buf_size: usize) ->  Receiver<S::Item> {
+        pub fn join_unordered<E:Executor>(self, buf_size: usize, exec: &mut E) ->  Receiver<S::Item> {
 
         let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
-            input.forward_and_spawn(join_tx.clone());
+            input.forward_and_spawn(join_tx.clone(), exec);
         }
 
         join_rx
     }
 
-    pub fn shuffle_unordered<FSel>(self, selector: FSel, degree: usize) ->
+    pub fn shuffle_unordered<FSel, E:Executor>(self, selector: FSel, degree: usize, exec: &mut E) ->
         // TODO is: ParallelStream<JoinTagged<Receiver<Tag<Tag<I>>>>>
         // TODO really should be:
         ParallelStream<Receiver<S::Item>>
@@ -167,7 +167,7 @@ where
         }
 
         for input in self.streams {
-            let splits = input.fork_sel(selector, degree);
+            let splits = input.fork_sel(selector, degree, exec);
             // TODO here it gets a other Tag
 
 
@@ -178,7 +178,7 @@ where
             }
         }
 
-        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter().map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree)).collect();
+        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter().map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree, exec)).collect();
 
         ParallelStream::from(joins)
     }
