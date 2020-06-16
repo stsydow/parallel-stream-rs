@@ -187,7 +187,7 @@ impl LogHistogram {
         let size = self.size();
         let mean_chunk_len = size as f32/ self.sample_ops as f32;
         let est_overhead = self.overhead.mean_ext * self.sample_ops;
-        println!("[{}] ops:{} ~chunk_len:{:0.1} ~overhead:{} time:{}\n~t_item:{}(med:{}) ~t_chunk:{}\n min: {} |{}| max: {}",
+        eprintln!("[{}] ops:{} ~chunk_len:{:0.1} ~overhead:{} time:{}\n~t_item:{}(med:{}) ~t_chunk:{}\n min: {} |{}| max: {}",
         name, self.sample_ops, mean_chunk_len,
         format_nanos(est_overhead as f32),
         format_nanos(self.sum as f32),
