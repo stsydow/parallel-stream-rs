@@ -316,6 +316,7 @@ fn shuffle_1k(b: &mut Bencher) {
     });
 }
 
+/*
 use std::collections::HashMap;
 pub type FreqTable = HashMap<Bytes, u64>;
 
@@ -334,6 +335,7 @@ pub fn count_bytes(frequency: &mut FreqTable, text: &Bytes) -> usize {
 
     i_start
 }
+
 #[bench]
 fn file_io(b: &mut Bencher) {
     use std::iter::FromIterator;
@@ -356,13 +358,9 @@ fn file_io(b: &mut Bencher) {
 
                     future::ok::<FreqTable, _>(frequency)
                 }, "split_and_count".to_owned())
-            .map(|frequency|{
-                Vec::from_iter(frequency)
-            }).decouple(2, &mut exec);
-
-            let result_stream = sub_table_streams
+                .map_result(|frequency| Vec::from_iter(frequency))
+                ... stream::iter_ok(frequency) ...
                 //.map_err(|e| {panic!(); ()})
-                .instrumented_map_chunked(|e| e, "test".to_owned())
                 .fork_sel_chunked( |(word, _count)| word.len() , THREADS, 2, &mut exec )
                 .instrumented_fold(|| FreqTable::new(), |mut frequency, chunk| {
 
@@ -371,11 +369,11 @@ fn file_io(b: &mut Bencher) {
                     }
 
                     future::ok::<FreqTable, _>(frequency)
-                }, "merge_table".to_owned()).map(move |mut sub_table| {
-                    let freq = Vec::from_iter(sub_table.drain());
-                    //freq.sort_unstable_by_key(|&(_, a)| a); //presort seems slower
-                    freq
-                } );
+                }, "merge_table".to_owned()).map_result(|sub_table| {
+                    Vec::from_iter(sub_table)
+                } )
+                //.merge( init, f, &mut exec)
+                ;
 
 
             // unimplemented!();
@@ -385,6 +383,7 @@ fn file_io(b: &mut Bencher) {
     });
 
 }
+*/
 
 #[bench]
 fn wait_task(b: &mut Bencher) {

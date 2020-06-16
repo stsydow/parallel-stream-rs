@@ -3,7 +3,7 @@ use std::hash::Hash;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::executor::Executor;
-use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked};
+use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 //TODO see https://github.com/async-rs/parallel-stream/
 
@@ -24,51 +24,48 @@ impl<S> From<Vec<S>> for ParallelStream<S> {
     }
 }
 
+impl<S> IntoIterator for ParallelStream<S> {
+    type Item = S;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.streams.into_iter()
+    }
+}
+
 impl<S> ParallelStream<S>
 {
     pub fn width(&self) -> usize {
         self.streams.len()
     }
+
+    pub fn add_stage<U, F>(self, stage: F) -> ParallelStream<U>
+        where F: FnMut(S) -> U,
+    {
+        let streams =  self.streams.into_iter().map(stage).collect();
+        ParallelStream{ streams }
+    }
 }
 
 impl<S, I> ParallelStream<S>
 where
-    //I: Send + 'static,
-    S: Stream<Item=Tag<I>>,// + Send + 'static,
+    S: Stream<Item=Tag<I>>,
 {
-    /*
-    pub fn width(&self) -> usize {
-        self.streams.len()
-    }
-    */
-
     pub fn join_ordered(self) -> JoinTagged<S> {
         join_tagged(self)
     }
 
     pub fn instrumented_map_tagged<U, F, FTag>(self, f: F, name:String)
         -> ParallelStream<InstrumentedMap<S, impl FnMut(Tag<I>) -> Tag<U> >>
-        where F: FnMut(I) -> U + Copy,
+        where F: Fn(I) -> U + Copy,
               //FTag: FnMut(Tag<I>) -> Tag<U>
     {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            //let map = input.instrumented_map(map_tag(f), name.clone());
-            let map = input.instrumented_map(move |t| t.map(f) , name.clone());
-            streams.push(map);
-        }
-        ParallelStream{ streams }
+        self.add_stage(|s| s.instrumented_map(move |t| t.map(f) , name.clone()))
     }
 
 
     pub fn untag(self) -> ParallelStream<stream::Map<S, impl FnMut(S::Item) -> I>> {
-        let mut streams = Vec::new();
-        for input in self.streams {
-            let map = input.map(|t| t.untag());
-            streams.push(map);
-        }
-        ParallelStream{ streams }
-
+        self.add_stage(|s| s.map(|t| t.untag()))
     }
 
     pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
@@ -161,35 +158,40 @@ where
 impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged version
 {
 
-    pub fn add_stage<U, F>(self, stage: F) -> ParallelStream<U>
-        where F: FnMut(S) -> U,
+    pub fn map<U, F>(self, f: F)
+        -> ParallelStream<futures::stream::Map<S, F>>
+        where F: Fn(S::Item) -> U + Copy,
     {
-        let streams =  self.streams.into_iter().map(stage).collect();
-        ParallelStream{ streams }
+        self.add_stage(|s| s.map(f))
     }
 
     pub fn instrumented_map<U, F>(self, f: F, name:String)
         -> ParallelStream<InstrumentedMap<S, F>>
-        where F: FnMut(S::Item) -> U + Copy,
+        where F: Fn(S::Item) -> U + Copy,
     {
         self.add_stage(|s| s.instrumented_map(f, name.clone()))
     }
 
     pub fn instrumented_fold<Fut, T, F, Finit>(self, init: Finit, f:F, name: String) ->
-        impl Stream<Item=T, Error=S::Error>
-        //futures::stream::BufferUnordered< futures::stream::IterOk< ... InstrumentedFold<S, F, Fut, T>, S::Error>>
-        where S: 'static,
-              Finit: Fn() -> T + Copy + 'static,
-              F: FnMut(T, S::Item) -> Fut + Copy + 'static,
+        ParallelStream<InstrumentedFold<S, F, Fut, T>>
+        where Finit: Fn() -> T + Copy,
+              F: Fn(T, S::Item) -> Fut + Copy,
               Fut: IntoFuture<Item = T>,
               S::Error: From<Fut::Error>,
-              //Self: Sized,
 
     {
-        let degree = self.streams.len();
-        futures::stream::iter_ok(self.streams).map(move |input|{
-            input.instrumented_fold(init(), f, name.clone())
-        }).buffer_unordered(degree)
+        self.add_stage(|s| s.instrumented_fold(init(), f, name.clone()))
+    }
+
+    pub fn fold<Fut, T, F, Finit>(self, init: Finit, f:F) ->
+        ParallelStream<futures::stream::Fold<S, F, Fut, T>>
+        where Finit: Fn() -> T + Copy,
+              F: Fn(T, S::Item) -> Fut + Copy,
+              Fut: IntoFuture<Item = T>,
+              S::Error: From<Fut::Error>,
+
+    {
+        self.add_stage(|s| s.fold(init(), f))
     }
 
     pub fn selective_context<R, Key, Ctx, CtxInit, FSel, FWork>(
@@ -206,6 +208,47 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         FWork: Fn(&mut Ctx, S::Item) -> R + Copy,
     {
         self.add_stage(|s| s.selective_context(ctx_builder, selector, work, name.clone()))
+    }
+}
+
+impl<R: Future> ParallelStream<R>
+{
+
+    pub fn map_result<U, F>(self, f: F)
+        -> ParallelStream<futures::future::Map<R, F>>
+        where F: Fn(R::Item) -> U + Copy,
+    {
+        self.add_stage(|s| s.map(f))
+    }
+
+    pub fn flatten_stream(self) -> ParallelStream<futures::future::FlattenStream<R>>
+        where R::Item: Stream<Error=R::Error>,
+    {
+        self.add_stage(|s| s.flatten_stream())
+    }
+
+    pub fn merge<Fut, T, F, E:Executor>(self, init: T, f:F, exec: &mut E) ->
+        futures::stream::Fold<Receiver<R::Item>, F, Fut, T>
+        where F: FnMut(T, R::Item) -> Fut,
+              Fut: IntoFuture<Item = T, Error = tokio::sync::mpsc::error::RecvError>,
+              R::Error: std::fmt::Debug,
+              R::Item: Send + 'static,
+              R: Send + 'static,
+
+    {
+        let (join_tx, join_rx) = channel::<R::Item>(self.width());
+        for input in self.streams {
+            let tx = join_tx.clone();
+            let task = input.map(|result| tx.send(result))
+            .map_err(|e| {
+                panic!("{:#?}", e)
+            })
+            .map(|_t| ());
+            exec.spawn(Box::new(task)).expect("can't spawn task");
+        }
+
+        join_rx.fold(init, f)
+        //self.join_unordered(self.width(), exec).fold(init, f);
     }
 }
 
