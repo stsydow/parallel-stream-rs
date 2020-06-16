@@ -239,11 +239,15 @@ impl<R: Future> ParallelStream<R>
         let (join_tx, join_rx) = channel::<R::Item>(self.width());
         for input in self.streams {
             let tx = join_tx.clone();
-            let task = input.map(|result| tx.send(result))
+            let task = input.and_then(|result| {
+                tx.send(result).map_err(|e| {
+                    panic!("send error:{:#?}", e)
+                })
+            })
+            .map(|_tx| () )
             .map_err(|e| {
                 panic!("{:#?}", e)
-            })
-            .map(|_t| ());
+            });
             exec.spawn(Box::new(task)).expect("can't spawn task");
         }
 
