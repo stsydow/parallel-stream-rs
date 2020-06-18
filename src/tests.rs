@@ -12,7 +12,7 @@ use test::black_box;
 use crate::stream_fork::fork_rr;
 use crate::{StreamExt};
 
-const BLOCK_COUNT:usize = 1_000;
+const BLOCK_COUNT:usize = 10_000;
 
 const THREADS:usize = 4;
 /*
@@ -41,7 +41,7 @@ fn touch(b: Message) {
 }
 
 #[bench]
-fn sync_fn_1k(b: &mut Bencher) {
+fn sync_fn(b: &mut Bencher) {
     b.iter(|| {
         for i in 0.. BLOCK_COUNT {
             let buffer = new_message(i);
@@ -65,7 +65,7 @@ fn dummy_iter() -> impl Iterator<Item=Message> {
 }
 
 #[bench]
-fn iter_stream_1k(b: &mut Bencher) {
+fn iter_stream(b: &mut Bencher) {
     b.iter(|| {
         dummy_iter()
             .for_each(|item| {
@@ -88,7 +88,7 @@ fn dummy_stream() -> impl Stream<Item=Message, Error=()> {
 }
 
 #[bench]
-fn async_stream_1k(b: &mut Bencher) {
+fn async_stream(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         let task = dummy_stream()
@@ -101,7 +101,7 @@ fn async_stream_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn async_stream_map10_1k(b: &mut Bencher) {
+fn async_stream_map10(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
     let task = dummy_stream()
@@ -126,20 +126,12 @@ fn async_stream_map10_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn channel_1k(b: &mut Bencher) {
+fn channel_buf1(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         let (tx, rx) = channel::<Message>(1);
 
-        let forward = dummy_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-            .map( |_tx| () )
-            .map_err(|_e| ());
-
-
-        runtime.spawn(src_task);
-
+        dummy_stream().forward_and_spawn(tx,&mut runtime.executor());
         let recv_task = rx
             .for_each(|item| {
                 test_msg(item);
@@ -153,19 +145,12 @@ fn channel_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn channel_buf2_1k(b: &mut Bencher) {
+fn channel_buf2(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         let (tx, rx) = channel::<Message>(2);
 
-        let forward = dummy_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-            .map( |_tx| () )
-            .map_err(|_e| ());
-
-
-        runtime.spawn(src_task);
+        dummy_stream().forward_and_spawn(tx,&mut runtime.executor());
 
         let recv_task = rx
             .for_each(|item| {
@@ -180,19 +165,12 @@ fn channel_buf2_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn channel_buf2_chunk10_1k(b: &mut Bencher) {
+fn channel_buf2_chunk10(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         let (tx, rx) = channel::<Vec<Message>>(2);
 
-        let forward = dummy_stream().chunks(10).forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-            .map( |_tx| () )
-            .map_err(|_e| ());
-
-
-        runtime.spawn(src_task);
+        dummy_stream().chunks(10).forward_and_spawn(tx,&mut runtime.executor());
 
         let recv_task = rx
             .for_each(|chunk| {
@@ -208,7 +186,7 @@ fn channel_buf2_chunk10_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn fork_join_1k(b: &mut Bencher) {
+fn fork_join(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
 
@@ -220,13 +198,7 @@ fn fork_join_1k(b: &mut Bencher) {
             let (in_tx, in_rx) = channel::<Message>(2);
 
             senders.push(in_tx);
-            let forward = in_rx.forward(out_tx.clone().sink_map_err(|e| panic!("forward send error: {}", e)));
-
-            let pipe_task = forward
-                .and_then(|(_zero, tx)|  tx.flush())
-                .map( |_tx| () )
-                .map_err(|_e| ());
-            runtime.spawn(pipe_task);
+            in_rx.forward_and_spawn(out_tx.clone(), &mut runtime.executor());
         }
 
         let fork = fork_rr(senders);
@@ -234,14 +206,7 @@ fn fork_join_1k(b: &mut Bencher) {
         (fork, out_rx)
     };
 
-    let forward = dummy_stream().forward(fork.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-    let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-        .map( |_tx| () )
-        .map_err(|_e| ());
-
-
-    runtime.spawn(src_task);
+    dummy_stream().forward_and_spawn(fork, &mut runtime.executor());
 
     let recv_task = join
         .for_each(|_item| {
@@ -255,7 +220,7 @@ fn fork_join_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn fork_join_unorderd_1k(b: &mut Bencher) {
+fn fork_join_unorderd(b: &mut Bencher) {
     b.iter(|| {
         tokio::run(futures::lazy(|| {
             let mut exec = DefaultExecutor::current();
@@ -280,7 +245,7 @@ fn fork_join_unorderd_1k(b: &mut Bencher) {
 }
 
 #[bench]
-fn shuffle_1k(b: &mut Bencher) {
+fn shuffle(b: &mut Bencher) {
     //let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
         tokio::run(futures::lazy(|| {
@@ -393,8 +358,6 @@ fn wait_task(b: &mut Bencher) {
 
         let task = future::lazy(|| future::ok::<(), std::io::Error>(()) );
 
-        //runtime.spawn(task);
-
         runtime.block_on(task).expect("error in main task");
     });
 }
@@ -410,7 +373,7 @@ fn spawn_1(b: &mut Bencher) {
 }
 
 #[bench]
-fn spawn_1k(b: &mut Bencher) {
+fn spawn(b: &mut Bencher) {
 
     b.iter(|| {
         let mut runtime = Runtime::new().expect("can not start runtime");
@@ -441,19 +404,12 @@ fn time_stream() -> impl Stream<Item=Instant, Error=()> {
 }
 
 #[bench]
-fn channel_latency(_b: &mut Bencher) {
+fn channel_buf1_latency(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(1);
 
-        let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-            .map( |_tx| () )
-            .map_err(|_e| ());
-
-
-        runtime.spawn(src_task);
+        let forward = time_stream().forward_and_spawn(tx, &mut runtime.executor());
 
         let recv_task = rx.fold((0u128, 0usize),
         |(sum, len), t| {
@@ -477,14 +433,7 @@ fn channel_buf2_latency(_b: &mut Bencher) {
     for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(2);
 
-        let forward = time_stream().forward(tx.sink_map_err(|e| panic!("forward send error: {}", e)));
-
-        let src_task = forward.and_then(|(_zero, tx)|  tx.flush())
-            .map( |_tx| () )
-            .map_err(|_e| ());
-
-
-        runtime.spawn(src_task);
+        let forward = time_stream().forward_and_spawn(tx, &mut runtime.executor());
 
         let recv_task = rx.fold((0u128, 0usize),
         |(sum, len), t| {

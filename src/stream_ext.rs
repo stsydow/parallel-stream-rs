@@ -86,8 +86,9 @@ pub trait StreamExt: Stream {
             .forward(sink.sink_map_err(|e| {
                 panic!("send error:{:#?}", e)
             }))
-            .and_then(|(_in, tx)| tx.flush() )
-            .map(|_tx| () )
+            .map(|(_in, _tx)| () )
+            //.and_then(|(_in, tx)| tx.flush() )
+            //.map(|_tx| () )
             .map_err(|e| {
                 panic!("{:#?}", e)
             });
