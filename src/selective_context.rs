@@ -233,7 +233,7 @@ impl<Chunk, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for Selec
                 #[cfg(stream_profiling)]
                 let start = Instant::now();
 
-                let result_chunk = chunk.into_iter().map(|e| self.apply(e)).collect();
+                let result_chunk:Self::Item = chunk.into_iter().map(|e| self.apply(e)).collect();
                 /*
                 let mut result_chunk = Vec::with_capacity(chunk.len());
 
@@ -244,7 +244,7 @@ impl<Chunk, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for Selec
                 */
 
                 #[cfg(stream_profiling)]
-                self.hist.sample_now_chunk(chunk.len(), &start);
+                self.hist.sample_now_chunk(result_chunk.len(), &start);
 
                 Some(result_chunk)
             },

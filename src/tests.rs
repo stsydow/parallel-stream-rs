@@ -409,7 +409,7 @@ fn channel_buf1_latency(_b: &mut Bencher) {
     for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(1);
 
-        let forward = time_stream().forward_and_spawn(tx, &mut runtime.executor());
+        time_stream().forward_and_spawn(tx, &mut runtime.executor());
 
         let recv_task = rx.fold((0u128, 0usize),
         |(sum, len), t| {
@@ -433,7 +433,7 @@ fn channel_buf2_latency(_b: &mut Bencher) {
     for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(2);
 
-        let forward = time_stream().forward_and_spawn(tx, &mut runtime.executor());
+        time_stream().forward_and_spawn(tx, &mut runtime.executor());
 
         let recv_task = rx.fold((0u128, 0usize),
         |(sum, len), t| {

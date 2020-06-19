@@ -114,7 +114,7 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
             },
             Some(chunk) => {
                 let start = Instant::now();
-                out_chunk = chunk.into_iter().map(&mut self.function).collect();
+                let out_chunk:Self::Item = chunk.into_iter().map(&mut self.function).collect();
                 self.hist.sample_now_chunk(out_chunk.len(), &start);
                 Some(out_chunk)
             }
