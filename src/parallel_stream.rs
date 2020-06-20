@@ -1,10 +1,11 @@
 
 use std::hash::Hash;
 use tokio::prelude::*;
-use tokio::sync::mpsc::{Receiver, channel};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::executor::Executor;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
+use crate::stream_fork::fork_sel;
 //TODO see https://github.com/async-rs/parallel-stream/
 
 pub struct ParallelStream<S>
@@ -131,27 +132,21 @@ where
         S: Send + 'static,
         FSel: Fn(&S::Item) -> usize + Copy + Send + 'static,
     {
-        let input_degree = self.streams.len();
-        //let joins_streams = vec![ Vec::with_capacity(input_degree); degree];
         let mut joins_streams = Vec::with_capacity(degree);
+        let mut joins_sinks = Vec::with_capacity(degree);
         for _i in 0 .. degree {
-            joins_streams.push( Vec::with_capacity(input_degree))
+            let (tx, rx) = channel::<S::Item>(buf_size);
+            joins_streams.push(rx);
+            joins_sinks.push(tx)
         }
 
-        for input in self.streams {
-            let splits = input.fork_sel(selector, degree, buf_size, exec);
-
-            let mut i = 0;
-            for s in splits.streams {
-                joins_streams[i].push(s);
-                i += 1;
-            }
+        for stream in self.streams {
+            let sinks:Vec<Sender<S::Item>> = joins_sinks.iter().map(|s| s.clone()).collect();
+            let fork = fork_sel(sinks, selector);
+            stream.forward_and_spawn(fork, exec);
         }
 
-        let joins: Vec<Receiver<S::Item>> = joins_streams.into_iter()
-            .map( |join_st| ParallelStream::from(join_st).join_unordered(input_degree, exec)).collect();
-
-        ParallelStream::from(joins)
+        ParallelStream::from(joins_streams)
     }
 }
 
