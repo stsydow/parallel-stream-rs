@@ -12,9 +12,9 @@ use test::black_box;
 use crate::stream_fork::fork_rr;
 use crate::{StreamExt};
 
-const BLOCK_COUNT:usize = 10_000;
+const BLOCK_COUNT:usize = 1_000;
 
-const THREADS:usize = 4;
+const THREADS:usize = 8;
 /*
 const BLOCK_SIZE:usize = 1<<12; //4k
 static PAYLOAD:[u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
@@ -188,6 +188,7 @@ fn channel_buf2_chunk10(b: &mut Bencher) {
 #[bench]
 fn fork_join(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut exec = runtime.executor();
     b.iter(|| {
 
     let (fork, join) = {
@@ -198,7 +199,7 @@ fn fork_join(b: &mut Bencher) {
             let (in_tx, in_rx) = channel::<Message>(2);
 
             senders.push(in_tx);
-            in_rx.forward_and_spawn(out_tx.clone(), &mut runtime.executor());
+            in_rx.forward_and_spawn(out_tx.clone(), &mut exec);
         }
 
         let fork = fork_rr(senders);
@@ -206,7 +207,7 @@ fn fork_join(b: &mut Bencher) {
         (fork, out_rx)
     };
 
-    dummy_stream().forward_and_spawn(fork, &mut runtime.executor());
+    dummy_stream().forward_and_spawn(fork, &mut exec);
 
     let recv_task = join
         .for_each(|_item| {
@@ -221,64 +222,40 @@ fn fork_join(b: &mut Bencher) {
 
 #[bench]
 fn fork_join_unorderd(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut exec = runtime.executor();
     b.iter(|| {
-        tokio::run(futures::lazy(|| {
-            let mut exec = DefaultExecutor::current();
             let pipeline = dummy_stream()
                 .fork(THREADS, 2, &mut exec)
-                .join_unordered(2*THREADS, &mut exec);
+                .join_unordered(THREADS +1, &mut exec);
 
-            let pipeline_task = pipeline.for_each(|_item| {
+            let pipeline_task = pipeline
+            .for_each(|_item| {
                 Ok(())
-            }).map_err(|_e| ());
-            pipeline_task
-        }));
-        /*
-           let pipeline = dummy_stream().fork(2).join();
-
-           let pipeline_task = pipeline.for_each(|_item| {
-           Ok(())
-           }).map_err(|_e| ());
-        //runtime.block_on(pipeline_task).expect("error in main task");
-        */
+            })
+            .map_err(|_e| ());
+            
+            runtime.block_on(pipeline_task).expect("error in main task");
     });
 }
 
 #[bench]
 fn shuffle(b: &mut Bencher) {
-    //let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut exec = runtime.executor();
     b.iter(|| {
-        tokio::run(futures::lazy(|| {
-            let mut exec = DefaultExecutor::current();
             let pipeline = dummy_stream()
                 .fork(THREADS, 2, &mut exec)
                 .shuffle_unordered(|i|{i * 7}, THREADS, 2, &mut exec)
                 .join_unordered(2*THREADS, &mut exec);
 
             let pipeline_task = pipeline
-            /*
-                .fold(0usize, |seq, item| {
-                    assert_eq!(seq, item);
-                    futures::future::ok(seq +1)
-                })
-            */
             .for_each(|_item| {
                 Ok(())
             })
-            .map_err(|_e| ())
-            .map(|_val|{()});
-            //eprintln!("submit");
-            pipeline_task
-        }));
-        /*
-           let pipeline = dummy_stream().fork(2).join();
-
-           let pipeline_task = pipeline.for_each(|_item| {
-           Ok(())
-           }).map_err(|_e| ());
-        //runtime.block_on(pipeline_task).expect("error in main task");
-        */
-    });
+            .map_err(|_e| ());
+            runtime.block_on(pipeline_task).expect("error in main task");
+        });
 }
 
 /*
