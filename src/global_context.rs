@@ -1,4 +1,4 @@
-use futures::{try_ready, Async, Poll, Stream};
+use futures::{ready, Async, Poll, Stream};
 
 pub struct GlobalContext<Ctx, InStream, F> {
     context: Ctx,
@@ -58,7 +58,7 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let async_event = try_ready!(self.input.poll());
+        let async_event = ready!(self.input.poll());
         let result = match async_event {
             Some(event) => {
                 let result = (self.work)(&mut self.context, &event);

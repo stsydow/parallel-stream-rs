@@ -1,8 +1,10 @@
-
+use futures::task::{Poll, Context};
+use futures::prelude::*;
 use std::hash::Hash;
-use tokio::prelude::*;
+use std::future::IntoFuture;
+
 use tokio::sync::mpsc::{Receiver, Sender, channel};
-use tokio::executor::Executor;
+use tokio::runtime::Handle;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 use crate::stream_fork::fork_sel;
@@ -69,12 +71,11 @@ where
         self.add_stage(|s| s.map(|t| t.untag()))
     }
 
-    pub fn shuffle_tagged<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
+    pub fn shuffle_tagged<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) ->
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
         I: Send,
         S: Send + 'static,
-        S::Error: std::fmt::Debug,
         FSel: Fn(&I) -> usize + Copy + Send + 'static,
     {
         let input_degree = self.streams.len();
@@ -109,14 +110,13 @@ impl<S> ParallelStream<S>
 where
     S: Stream + Send + 'static,
     S::Item: Send + 'static,
-    S::Error: std::fmt::Debug,
 {
 
-    pub fn decouple<E:Executor>(self, buf_size: usize, exec: &mut E) ->  ParallelStream<Receiver<S::Item>> {
+    pub fn decouple(self, buf_size: usize, exec: &mut Handle) ->  ParallelStream<Receiver<S::Item>> {
         self.add_stage(|s| s.decouple(buf_size, exec))
     }
 
-    pub fn join_unordered<E:Executor>(self, buf_size: usize, exec: &mut E) ->  Receiver<S::Item> {
+    pub fn join_unordered(self, buf_size: usize, exec: &mut Handle) ->  Receiver<S::Item> {
 
         let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
@@ -126,7 +126,7 @@ where
         join_rx
     }
 
-    pub fn shuffle_unordered<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
+    pub fn shuffle_unordered<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) ->
         ParallelStream<Receiver<S::Item>>
     where
         S: Send + 'static,
@@ -171,8 +171,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         ParallelStream<InstrumentedFold<S, F, Fut, T>>
         where Finit: Fn() -> T + Copy,
               F: Fn(T, S::Item) -> Fut + Copy,
-              Fut: IntoFuture<Item = T>,
-              S::Error: From<Fut::Error>,
+              Fut: IntoFuture<Output = T>,
 
     {
         self.add_stage(|s| s.instrumented_fold(init(), f, name.clone()))
@@ -182,8 +181,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         ParallelStream<futures::stream::Fold<S, F, Fut, T>>
         where Finit: Fn() -> T + Copy,
               F: Fn(T, S::Item) -> Fut + Copy,
-              Fut: IntoFuture<Item = T>,
-              S::Error: From<Fut::Error>,
+              Fut: IntoFuture<Output = T>,
 
     {
         self.add_stage(|s| s.fold(init(), f))
@@ -211,27 +209,26 @@ impl<R: Future> ParallelStream<R>
 
     pub fn map_result<U, F>(self, f: F)
         -> ParallelStream<futures::future::Map<R, F>>
-        where F: Fn(R::Item) -> U + Copy,
+        where F: Fn(R::Output) -> U + Copy,
     {
         self.add_stage(|s| s.map(f))
     }
 
     pub fn flatten_stream(self) -> ParallelStream<futures::future::FlattenStream<R>>
-        where R::Item: Stream<Error=R::Error>,
+        where R::Output: Stream,
     {
         self.add_stage(|s| s.flatten_stream())
     }
 
-    pub fn merge<Fut, T, F, E:Executor>(self, init: T, f:F, exec: &mut E) ->
-        futures::stream::Fold<Receiver<R::Item>, F, Fut, T>
-        where F: FnMut(T, R::Item) -> Fut,
-              Fut: IntoFuture<Item = T, Error = tokio::sync::mpsc::error::RecvError>,
-              R::Error: std::fmt::Debug,
-              R::Item: Send + 'static,
+    pub fn merge<Fut, T, F>(self, init: T, f:F, exec: &mut Handle) ->
+        futures::stream::Fold<Receiver<R::Output>, F, Fut, T>
+        where F: FnMut(T, R::Output) -> Fut,
+              Fut: IntoFuture<Output = T>,
+              R::Output: Send + 'static,
               R: Send + 'static,
 
     {
-        let (join_tx, join_rx) = channel::<R::Item>(self.width());
+        let (join_tx, join_rx) = channel::<R::Output>(self.width());
         for input in self.streams {
             let tx = join_tx.clone();
             let task = input.and_then(|result| {
@@ -254,7 +251,6 @@ impl<R: Future> ParallelStream<R>
 impl<S: Stream, C> ParallelStream<S>
     where  C: IntoIterator,
           S:Stream<Item=C>,
-          S::Error: std::fmt::Debug,
 {
 
     pub fn instrumented_map_chunked<U, F>(self, f: F, name:String)
@@ -302,7 +298,7 @@ impl<S: Stream, C> ParallelStream<S>
     }
     */
 
-    pub fn shuffle_unordered_chunked<FSel, E:Executor>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut E) ->
+    pub fn shuffle_unordered_chunked<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) ->
         ParallelStream<Receiver<Vec<C::Item>>>
     where
         C::Item: Send + 'static,

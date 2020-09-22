@@ -9,15 +9,15 @@ edition = "2018"
 argparse = "0.2"
 log = "0.4"
 #simplelog = "0.7"
-#tokio = "0.1"
-futures = "0.1"
-bytes = "0.4"
+futures = "0.3"
+bytes = "0.5"
+pin-project = "0.4"
 
 [dependencies.tokio]
-version = "0.1"
-default-features = false
+version = "0.2"
+#default-features = false
 #default features = ["codec", "fs", "io", "reactor", "rt-full", "sync", "tcp", "timer", "udp", "uds"]
-features = ["codec", "fs", "io", "rt-full", "sync"]
+features = ["io-std", "rt-threaded", "fs", "sync", "stream"]
 
 [dev-dependencies]
 libc = "0.2"

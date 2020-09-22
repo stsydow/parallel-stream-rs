@@ -1,4 +1,7 @@
-use futures::{try_ready, Async, Poll, Stream};
+use futures::ready;
+use futures::task::{Poll, Context};
+use std::pin::Pin;
+use futures::prelude::*;
 use std::collections::{HashMap, hash_map::Entry};
 use std::hash::Hash;
 
@@ -102,10 +105,10 @@ where
     FWork: FnMut(&mut Ctx, InStream::Item) -> R,
 {
     type Item = R;
-    type Error = InStream::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let async_event = try_ready!(self.input.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let async_event = ready!(self.input.poll_next(cx));
         let result = match async_event {
             Some(event) => {
                 #[cfg(stream_profiling)]
@@ -126,7 +129,7 @@ where
             },
         };
 
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
     }
 }
 
@@ -212,20 +215,20 @@ pub fn selective_context_buffered<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, F
 }
 
 
-impl<Chunk, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
+impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>
     where //Ctx:Context<Event=Event, Result=R>,
         Chunk: IntoIterator,
-        InStream: Stream<Item=Chunk, Error=Error>,
+        InStream: Stream<Item=Chunk>,
         Key: Ord + Hash,
         CtxInit:Fn(&Key) -> Ctx,
         FSel: Fn(&Chunk::Item) -> Key,
         FWork:FnMut(&mut Ctx, Chunk::Item) -> R
 {
     type Item = Vec<R>;
-    type Error = Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let async_chunk = try_ready!(self.input.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let async_chunk = ready!(self.input.poll_next(cx));
 
         let result = match async_chunk {
             Some(chunk)=> {
@@ -255,6 +258,6 @@ impl<Chunk, Error, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for Selec
             }
         };
 
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
     }
 }

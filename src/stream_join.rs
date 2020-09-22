@@ -1,4 +1,7 @@
-use futures::{try_ready, Async, Poll, Stream};
+use futures::ready;
+use futures::task::{Poll, Context};
+use std::pin::Pin;
+use futures::prelude::*;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
@@ -76,14 +79,14 @@ where
     S: Stream<Item=Tag<I>>,
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
 
         self.pipelines.retain(|p| ! p.is_closed());
 
         if self.pipelines.is_empty() {
-            return Ok(Async::Ready(None));
+            return Poll::Ready(None);
         }
 
         for i in 0 .. self.pipelines.len() {
@@ -94,27 +97,27 @@ where
                 if item.nr() == self.next_tag {
                     let item = pipe.buffer.pop().unwrap();
                     self.next_tag += 1;
-                    return Ok(Async::Ready(Some(item)));
+                    return Poll::Ready(Some(item));
                 }
                 //continue;
             } else {
                 if let Some(stream) = &mut pipe.stream {
-                    match stream.poll()? {
-                        Async::Ready(Some(item)) => {
+                    match stream.poll_next(cx) {
+                        Poll::Ready(Some(item)) => {
                             assert!(item.nr() >= self.next_tag);
                             if item.nr() == self.next_tag {
                                 self.next_tag += 1;
-                                return Ok(Async::Ready(Some(item)));
+                                return Poll::Ready(Some(item));
                             } else {
                                 pipe.buffer.push(item);
                                 //continue;
                             }
                         },
-                        Async::Ready(None) => {
+                        Poll::Ready(None) => {
                             pipe.stream = None;
                             return self.poll();
                         },
-                        Async::NotReady => {
+                        Poll::Pending => {
                             //continue;
                         }
                     };
@@ -127,7 +130,7 @@ where
             eprintln!("closed {} buf {}", pipe.stream.is_none(), pipe.buffer.len());
         }
         */
-        Ok(Async::NotReady)
+        Poll::Pending
     }
 }
 
@@ -195,13 +198,13 @@ where
     FOrd: Fn(&EventStream::Item) -> u64,
 {
     type Item = EventStream::Item;
-    type Error = EventStream::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
         match self.last_values.peek() {
             Some(q_item) => {
                 let index = q_item.pipeline_index;
-                let async_event = try_ready!(self.pipelines[index].poll()); //leave on error
+                let async_event = ready!(self.pipelines[index].poll_next(cx)); //leave on error
 
                 let old_event = self.last_values.pop().unwrap().event; //peek went ok already
                 match async_event {
@@ -217,11 +220,11 @@ where
                 };
 
                 match old_event {
-                    Some(event) => Ok(Async::Ready(Some(event))),
-                    None => self.poll(),
+                    Some(event) => Poll::Ready(Some(event)),
+                    None => self.poll_next(cx),
                 }
             }
-            None => Ok(Async::Ready(None)),
+            None => Poll::Ready(None),
         }
     }
 }

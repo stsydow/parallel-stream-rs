@@ -3,8 +3,10 @@ use std::time::Instant;
 #[cfg(stream_profiling)]
 use crate::LogHistogram;
 use core::mem;
-use futures::{Future, Poll, IntoFuture, Async};
-use futures::stream::Stream;
+use futures::task::{Poll, Context};
+use std::pin::Pin;
+use futures::prelude::*;
+use std::future::IntoFuture;
 
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
@@ -37,8 +39,7 @@ enum State<T, F> where F: Future {
 pub fn instrumented_fold<S, F, Fut, T>(s: S, f: F, t: T, name: String) -> InstrumentedFold<S, F, Fut, T>
     where S: Stream,
           F: FnMut(T, S::Item) -> Fut,
-          Fut: IntoFuture<Item = T>,
-          S::Error: From<Fut::Error>,
+          Fut: IntoFuture<Output = T>,
 {
     #[cfg(not(stream_profiling))]
     {let _ = &name;}
@@ -57,30 +58,28 @@ pub fn instrumented_fold<S, F, Fut, T>(s: S, f: F, t: T, name: String) -> Instru
 impl<S, F, Fut, T> Future for InstrumentedFold<S, F, Fut, T>
     where S: Stream,
           F: FnMut(T, S::Item) -> Fut,
-          Fut: IntoFuture<Item = T>,
-          S::Error: From<Fut::Error>,
+          Fut: IntoFuture<Output = T>,
 {
-    type Item = T;
-    type Error = S::Error;
+    type Output = T;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<T, S::Error> {
+    fn poll(&mut self) -> Poll<T> {
         loop {
             match mem::replace(&mut self.state, State::Empty) {
                 State::Empty => panic!("cannot poll Fold twice"),
                 State::Ready(state) => {
                     match self.stream.poll()? {
-                        Async::Ready(Some(e)) => {
+                        Poll::Ready(Some(e)) => {
                             let start_time = Instant::now();
                             let future = (self.f)(state, e);
                             let future = future.into_future();
                             self.state = State::Processing((start_time, future)); //TODO: we messure scheduling here!
                         }
-                        Async::Ready(None) => {
+                        Poll::Ready(None) => {
                             self.hist.print_stats(&self.name);
                             return Ok(Async::Ready(state));
                         },
-                        Async::NotReady => {
+                        Poll::Pending => {
                             self.state = State::Ready(state);
                             return Ok(Async::NotReady)
                         }
@@ -88,11 +87,11 @@ impl<S, F, Fut, T> Future for InstrumentedFold<S, F, Fut, T>
                 }
                 State::Processing((start_time, mut fut)) => {
                     match fut.poll()? {
-                        Async::Ready(state) => {
+                        Poll::Ready(state) => {
                             self.hist.sample_now(&start_time);
                             self.state = State::Ready(state)
                         },
-                        Async::NotReady => {
+                        Poll::Pending => {
                             self.state = State::Processing((start_time, fut));
                             return Ok(Async::NotReady)
                         }
@@ -103,7 +102,7 @@ impl<S, F, Fut, T> Future for InstrumentedFold<S, F, Fut, T>
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<T, S::Error> {
+    fn poll(&mut self) -> Poll<T> {
         loop {
             match mem::replace(&mut self.state, State::Empty) {
                 State::Empty => panic!("cannot poll Fold twice"),

@@ -1,7 +1,9 @@
-use tokio::prelude::*;
-use tokio;
+use futures::prelude::*;
+use futures::task::Poll;
+use core::pin::Pin;
+use core::task::Context;
 use std::time::{ Instant };
-use futures::try_ready;
+use futures::ready;
 use crate::LogHistogram;
 
 pub struct Tag<S>
@@ -22,11 +24,11 @@ impl<S, I>  Stream for Tag<S>
     where S: Stream<Item=I>
 {
     type Item = (Instant, S::Item);
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let maybe_item = try_ready!(self.stream.poll());
-        Ok(Async::Ready( maybe_item.map(|item| (Instant::now(), item))))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let maybe_item = ready!(self.stream.poll_next(cx));
+        Async::Ready( maybe_item.map(|item| (Instant::now(), item)))
     }
 }
 
@@ -54,22 +56,19 @@ impl<S, I>  Stream for Meter<S>
     where S: Stream<Item=I>
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let result = self.stream.poll();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let result = self.stream.poll_next(cx);
         let now = Instant::now();
         match result {
-            Err(ref _err) => {
-                //error!("stream err!");
-            }
-            Ok(Async::NotReady) => {
+            Poll::Pending => {
 
             },
-            Ok(Async::Ready(None)) => {
+            Poll::Ready(None) => {
                 self.hist.print_stats(&self.name);
             },
-            Ok(Async::Ready(Some(ref _item))) => {
+            Poll::Ready(Some(ref _item)) => {
                 if let Some(last_time) = self.last_stamp {
                     let diff = now.duration_since(last_time).as_nanos() as u64;
                     self.hist.add_sample_ns(diff);
@@ -105,22 +104,19 @@ impl<S, I>  Stream for Probe<S>
     where S: Stream<Item=(Instant, I)>
 {
     type Item = S::Item;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        let result = self.stream.poll();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let result = self.stream.poll_next(cx);
 
         match result {
-            Err(ref _err) => {
-                //error!("stream err!");
-            }
-            Ok(Async::NotReady) => {
+            Poll::Pending => {
 
             },
-            Ok(Async::Ready(None)) => {
+            Poll::Ready(None) => {
                 self.hist.print_stats(&self.name);
             },
-            Ok(Async::Ready(Some((ref time, ref _item)))) => {
+            Poll::Ready(Some((ref time, ref _item))) => {
                 self.hist.sample_now(time);
             }
         };
@@ -153,12 +149,12 @@ where S: Stream<Item=(Instant, I)>,
       F: FnMut(I) -> U,
 {
     type Item = (Instant, U);
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<(Instant, U)>, S::Error> {
-        let option = try_ready!(self.stream.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<(Instant, U)>>
+    {
+        let option = ready!(self.stream.poll_next(cx));
         let result = option.map(|(timestamp, item)| (timestamp, (self.function)(item)) );
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
     }
 }
 

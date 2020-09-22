@@ -1,6 +1,6 @@
-use tokio::prelude::*;
-//use tokio;
-use futures::try_ready;
+use futures::prelude::*;
+use futures::task::Poll;
+use futures::ready;
 #[cfg(stream_profiling)]
 use crate::LogHistogram;
 #[cfg(stream_profiling)]
@@ -38,11 +38,10 @@ impl<S, I, F, U> Stream for InstrumentedMap<S, F>
           F: FnMut(S::Item) -> U,
 {
     type Item = U;
-    type Error = S::Error;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<Option<U>, S::Error> {
-        let option = try_ready!(self.stream.poll());
+    fn poll(&mut self) -> Poll<Option<U>> {
+        let option = ready!(self.stream.poll());
         let result = match option {
             None => {
                 self.hist.print_stats(&self.name);
@@ -56,13 +55,13 @@ impl<S, I, F, U> Stream for InstrumentedMap<S, F>
             }
         };
 
-        Ok(Async::Ready(result))
+        Async::Ready(result)
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<Option<U>, S::Error> {
-        let option = try_ready!(self.stream.poll());
-        Ok(Async::Ready(option.map(|item| (self.function)(item) )))
+    fn poll(&mut self) -> Poll<Option<U>> {
+        let option = ready!(self.stream.poll());
+        Poll::Ready(option.map(|item| (self.function)(item) ))
     }
 }
 
@@ -102,11 +101,10 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
     type Item = Vec<U>;
     //type Item = std::iter::Map<C::IntoIter, &'static mut F>;
     //type Item = std::iter::Map<C::IntoIter, F>;
-    type Error = S::Error;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, S::Error> {
-        let option = try_ready!(self.stream.poll());
+    fn poll(&mut self) -> Poll<Option<Self::Item>> {
+        let option = ready!(self.stream.poll());
         let result =  match option {
             None => {
                 self.hist.print_stats(&self.name);
@@ -119,17 +117,17 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
                 Some(out_chunk)
             }
         };
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, S::Error> {
-        let option = try_ready!(self.stream.poll());
+    fn poll(&mut self) -> Poll<Option<Self::Item>> {
+        let option = ready!(self.stream.poll());
         let result = option.map(|chunk|
             {
                 chunk.into_iter().map(&mut self.function).collect()
             });
 
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
     }
 }

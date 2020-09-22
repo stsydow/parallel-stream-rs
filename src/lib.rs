@@ -1,4 +1,5 @@
 #![feature(test)]
+#![feature(into_future)]
 extern crate test;
 //#![feature(impl_trait_in_bindings)]
 //extern crate num_derive;
@@ -42,7 +43,7 @@ pub use crate::tagged_stream::{TaggedStream, Tag, tag};
 #[cfg(test)]
 mod tests;
 
-use tokio::prelude::*;
+use futures::prelude::*;
 use std::time::{ Instant };
 
 impl<T: ?Sized, I> TimedStream<I> for T where T: Stream<Item=(Instant, I)> {}

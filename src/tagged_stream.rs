@@ -1,6 +1,9 @@
 use std::cmp::Ordering;
-use tokio::prelude::*;
-use futures::try_ready;
+use std::pin::Pin;
+use futures::ready;
+use futures::Stream;
+use futures::task::{Poll, Context};
+use pin_project::{pin_project, project};
 
 pub struct Tag<I> {
     seq_nr: usize,
@@ -53,8 +56,10 @@ impl<I> AsRef<I> for Tag<I> {
     }
 }
 
+#[pin_project]
 pub struct TaggedStream<S>
 {
+    #[pin]
     stream: S,
     seq_nr: usize
 }
@@ -74,10 +79,13 @@ impl<S:Stream> TaggedStream<S> {
 impl<S:Stream> Stream for TaggedStream<S> {
 
     type Item = Tag<S::Item>;
-    type Error = S::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, S::Error> {
-        let option = try_ready!(self.stream.poll());
+    
+    #[project]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        #[project]
+        let TaggedStream { stream, seq_nr } = self.project();
+        let option = ready!(stream.poll_next(cx));
         let result = match option {
             None => {
                 None
@@ -87,13 +95,19 @@ impl<S:Stream> Stream for TaggedStream<S> {
             }
         };
 
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
     }
 }
 
 
+#[pin_project]
 pub struct Map<S, F>
 {
+    #[pin]
     stream: S,
     function: F
 }
@@ -103,28 +117,45 @@ where S: Stream<Item=Tag<I>>,
       F: FnMut(I) -> U,
 {
     type Item = Tag<U>;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<Tag<U>>, S::Error> {
-        let option = try_ready!(self.stream.poll());
-        let result = option.map(|t| t.map(&mut self.function));
-        Ok(Async::Ready(result))
+    #[project]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Tag<U>>>
+    {
+        #[project]
+        let Map { stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
+        let result = option.map(|t| t.map(&mut function));
+        Poll::Ready(result)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
     }
 }
 
-pub struct Untag<S>(S);
+#[pin_project]
+pub struct Untag<S>(
+#[pin]
+S
+);
 
 impl<S, I> Stream for Untag<S>
 where S: Stream<Item=Tag<I>>,
 {
     type Item = I;
-    type Error = S::Error;
 
-    fn poll(&mut self) -> Poll<Option<I>, S::Error>
+    #[project]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<I>>
     {
-        let async_item = try_ready!(self.0.poll());
+        #[project]
+        let Untag (stream) = self.project();
+        let async_item = ready!(stream.poll_next(cx));
         let result = async_item.map(|t| t.untag());
-        Ok(Async::Ready(result))
+        Poll::Ready(result)
+    }
+    
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
     }
 }
 

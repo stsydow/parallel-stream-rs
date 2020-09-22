@@ -1,28 +1,31 @@
-use futures::{try_ready, Stream, Async, AsyncSink, Poll, Sink, StartSend};
-
+use futures::ready;
+use futures::task::{Poll, Context};
+use std::pin::Pin;
+use futures::prelude::*;
+use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
-use tokio::executor::Executor;
+use tokio::runtime::Handle;
+
 use crate::{ParallelStream, StreamExt};
 use std::iter::FromIterator;
 
-struct Pipe<S>
-where S: Sink,
+struct Pipe<S, I>
+where S: Sink<I>,
 {
     sink: Option<S>,
-    buffer: Option<S::SinkItem>,
+    buffer: Option<I>,
 }
 
-pub struct ChunkedFork<S: Sink, FSel>
-where S: Sink,
+pub struct ChunkedFork<I, S: Sink<I>, FSel>
 {
     selector: FSel,
-    pipelines: Vec<Pipe<S>>,
+    pipelines: Vec<Pipe<S, I>>,
 }
 
 
-pub fn chunked_fork<S, Si, FSel, Item>(sinks: Si, selector: FSel) -> ChunkedFork<S, FSel>
+pub fn chunked_fork<S, Si, FSel, Item>(sinks: Si, selector: FSel) -> ChunkedFork<Vec<Item>, S, FSel>
 where
-    S: Sink<SinkItem=Vec<Item>>,
+    S: Sink<Vec<Item>>,
     Si: IntoIterator<Item=S>,
     FSel: Fn(&Item) -> usize,
 {
@@ -33,11 +36,10 @@ where
 }
 
 
-pub fn fork_stream_sel_chunked<S, FSel, C, E:Executor>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut E) -> ParallelStream<Receiver<Vec<C::Item>>>
+pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<Receiver<Vec<C::Item>>>
 where
     C: IntoIterator,
     S: Stream<Item=C> + Send + 'static,
-    S::Error: std::fmt::Debug,
     C::Item: Send + 'static,
     FSel: Fn(&C::Item) -> usize + Send + 'static,
 {
@@ -54,9 +56,9 @@ where
         ParallelStream::from(streams)
 }
 
-impl<S, Item, FSel> ChunkedFork<S, FSel>
+impl<S, Item, FSel> ChunkedFork<Vec<Item>, S, FSel>
 where
-    S: Sink<SinkItem=Vec<Item>>,
+    S: Sink<Vec<Item>>,
 {
     pub fn is_clear(&self) -> bool {
         ! self.pipelines.iter().all(|pipe| {
@@ -64,23 +66,26 @@ where
         })
     }
 
-    pub fn try_send_all(&mut self) -> Result<bool,S::SinkError> {
+    pub fn try_send_all(&mut self, cx: &mut Context) -> Result<bool,S::Error> {
         let mut all_empty = true;
 
         for pipe in self.pipelines.iter_mut() {
-            let buffer =  pipe.buffer.take();
-            if let Some(buf) = buffer {
-                let sink = pipe.sink.as_mut().unwrap();
-                match sink.start_send(buf)? {
-                    AsyncSink::Ready => {
-                        () //pipe.buffer = None;
-                    },
-                    AsyncSink::NotReady(buf) => {
-                        pipe.buffer = Some(buf);
-                        all_empty = false;
-                    }
-                }
+            let sink = pipe.sink.as_mut().unwrap();
+            match sink.poll_ready(cx) {
+                Poll::Ready(Ok()) => {
+                    let buffer = pipe.buffer.take();
+                    if let Some(buf) = buffer {
+                        sink.start_send(buf)?
 
+                    }
+                    ()
+                },
+                Poll::Ready(Err(e)) => {
+                    return Err(e)        
+                },
+                Poll::Pending => {
+                        all_empty = false;
+                }
             }
         }
 
@@ -88,19 +93,26 @@ where
     }
 }
 
-impl<I, S, FSel> Sink for ChunkedFork<S, FSel>
+impl<I, S, FSel> Sink<Vec<I>> for ChunkedFork<Vec<I>, S, FSel>
 where
     //C: IntoIterator<Item=I>,
     FSel: Fn(&I) -> usize,
-    S: Sink<SinkItem=Vec<I>>
+    S: Sink<Vec<I>>
 {
-    type SinkItem = Vec<I>;
-    type SinkError = S::SinkError;
+    type Error = S::Error;
 
-    fn start_send(&mut self, chunk: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        cx: &mut Context
+        ) -> Poll<Result<(), Self::Error>> 
+    {
         if !self.try_send_all()? {
-            return Ok(AsyncSink::NotReady(chunk));
+            return Poll::Pending;
         }
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, chunk: Vec<I>) -> Result<(), Self::Error> {
 
         let degree = self.pipelines.len();
 
@@ -114,43 +126,49 @@ where
         }
         self.try_send_all()?;
 
-        Ok(AsyncSink::Ready)
+        Ok(())
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context
+    ) -> Poll<Result<(), Self::Error>> {
 
         let state = if self.try_send_all()? {
             for iter_sink in self.pipelines.iter_mut() {
                 if let Some(ref mut sink) = iter_sink.sink {
-                    try_ready!(sink.poll_complete());
+                    ready!(sink.poll_flush(cx));
                 }
             }
-            Async::Ready(())
+            Poll::Ready(Ok(()))
         } else {
-            Async::NotReady
+            Poll::Pending
         };
 
-        Ok(state)
+        state
     }
 
-    fn close(&mut self) -> Poll<(), Self::SinkError> {
+    fn poll_close(
+        self: Pin<&mut Self>,
+        cx: &mut Context
+    ) -> Poll<Result<(), Self::Error>> {
 
         let state = if self.try_send_all()? {
             for iter_sink in self.pipelines.iter_mut() {
                 if let Some(ref mut sink) = iter_sink.sink {
                     if iter_sink.buffer.is_none(){
-                        try_ready!(sink.close());
+                        ready!(sink.poll_close(cx));
                         iter_sink.sink = None;
                     } else {
-                         return Ok(Async::NotReady);
+                         return Poll::Pending;
                     }
                 }
             }
-            Async::Ready(())
+            Poll::Ready(Ok(()))
         } else {
-            Async::NotReady
+            Poll::Pending
         };
 
-        Ok(state)
+        state
     }
 }

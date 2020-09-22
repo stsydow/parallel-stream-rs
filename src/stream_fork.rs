@@ -1,7 +1,10 @@
-use futures::{try_ready, Async, Poll, Sink, Stream, StartSend};
+use futures::ready;
+use futures::task::{Poll, Context};
+use std::pin::Pin;
+use futures::prelude::*;
 use tokio;
 use tokio::sync::mpsc::{channel, Receiver};
-use tokio::executor::Executor;
+use tokio::runtime::Handle;
 
 use crate::{ParallelStream, StreamExt};
 
@@ -10,7 +13,7 @@ pub struct ForkRR<S> {
     next_index: usize,
 }
 
-pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
+pub fn fork_rr<I, S:Sink<I>>(sinks: Vec<S>) -> ForkRR<S> {
     let mut pipelines = Vec::with_capacity(sinks.len());
     for s in sinks {
         pipelines.push(Some(s));
@@ -23,10 +26,9 @@ pub fn fork_rr<S:Sink>(sinks: Vec<S>) -> ForkRR<S> {
     }
 }
 
-pub fn fork_stream<S, E: Executor>(stream:S, degree:usize, buf_size: usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream<S>(stream:S, degree:usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
-S::Error: std::fmt::Debug,
 S: Send,
 {
         let mut streams = Vec::new();
@@ -43,41 +45,57 @@ S: Send,
         ParallelStream::from(streams)
 }
 
-impl<S, Item> Sink for ForkRR<S>
-    where S: Sink<SinkItem=Item>
+impl<S, I> Sink<I> for ForkRR<S>
+    where S: Sink<I>
 {
-    type SinkItem = Item;
-    type SinkError = S::SinkError;
+    type Error = S::Error;
 
-    fn start_send(&mut self, item: Item) -> StartSend<Item, Self::SinkError> {
+    fn poll_ready(
+        self: Pin<&mut Self>, 
+        cx: &mut Context) 
+    -> Poll<Result<(), Self::Error>> 
+    {
         let i = self.next_index % self.pipelines.len();
         let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
-        let result = sink.start_send(item)?;
-        if result.is_ready() {
-            self.next_index += 1;
-        }
-        Ok(result)
+        sink.poll_ready(cx)
     }
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+    fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
+        let i = self.next_index % self.pipelines.len();
+        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
+        sink.start_send(item)?;
+
+        self.next_index += 1;
+        Ok(())
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context) 
+        -> Poll<Result<(), Self::Error>>
+    {
         for iter_sink in self.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                try_ready!(sink.poll_complete());
+                ready!(sink.poll_flush(cx));
             }
         }
 
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 
-    fn close(&mut self) -> Poll<(), Self::SinkError> {
+    fn poll_close(
+        self: Pin<&mut Self>,
+        cx: &mut Context) 
+        -> Poll<Result<(), Self::Error>>
+    {
         for i in 0..self.pipelines.len() {
             if let Some(sink) = &mut self.pipelines[i] {
-                try_ready!(sink.close());
+                ready!(sink.poll_close(cx));
                 self.pipelines[i] = None;
             }
         }
 
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -86,7 +104,7 @@ pub struct ForkSel<S, FSel> {
     pipelines: Vec<Option<S>>,
 }
 
-pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
+pub fn fork_sel<I, S:Sink<I>, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
     where Si: IntoIterator<Item=S>,
 {
     ForkSel {
@@ -95,10 +113,9 @@ pub fn fork_sel<S:Sink, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
     }
 }
 
-pub fn fork_stream_sel<S, FSel, E: Executor>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut E) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
-S::Error: std::fmt::Debug,
 S: Send,
 FSel: Fn(&S::Item) -> usize + Send + 'static,
 {
@@ -117,41 +134,61 @@ FSel: Fn(&S::Item) -> usize + Send + 'static,
 }
 
 
-impl<S, FSel> Sink for ForkSel<S, FSel>
+impl<S, I, FSel> Sink<I> for ForkSel<S, FSel>
 
-where S: Sink,
-      S::SinkItem: Send,
-      FSel: Fn(&S::SinkItem) -> usize,
+where S: Sink<I>,
+      I: Send,
+      FSel: Fn(&I) -> usize,
 {
-    type SinkItem = S::SinkItem;
-    type SinkError = S::SinkError;
+    type Error = S::Error;
 
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        let i = (self.selector)(&item) % self.pipelines.len();
-        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
-        let result = sink.start_send(item)?;
-        Ok(result)
-    }
-
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+    fn poll_ready(
+        self: Pin<&mut Self>,
+        cx: &mut Context) 
+        -> Poll<Result<(), Self::Error>>
+    {
         for iter_sink in self.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                try_ready!(sink.poll_complete());
+                ready!(sink.poll_ready(cx));
             }
         }
 
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 
-    fn close(&mut self) -> Poll<(), Self::SinkError> {
+    fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
+        let i = (self.selector)(&item) % self.pipelines.len();
+        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
+        sink.start_send(item)
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context) 
+        -> Poll<Result<(), Self::Error>>
+    {
+        for iter_sink in self.pipelines.iter_mut() {
+            if let Some(sink) = iter_sink {
+                ready!(sink.poll_flush(cx));
+            }
+        }
+
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(
+        self: Pin<&mut Self>,
+        cx: &mut Context) 
+        -> Poll<Result<(), Self::Error>>
+    {
         for i in 0..self.pipelines.len() {
             if let Some(sink) = &mut self.pipelines[i] {
-                try_ready!(sink.close());
+                ready!(sink.poll_close(cx));
                 self.pipelines[i] = None;
             }
         }
 
-        Ok(Async::Ready(()))
+        Poll::Ready(Ok(()))
     }
 }
 
