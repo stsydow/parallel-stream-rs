@@ -1,17 +1,22 @@
 use futures::prelude::*;
 use futures::task::Poll;
 use futures::ready;
+use std::pin::Pin;
+use core::task::Context;
+use pin_project::pin_project;
 #[cfg(stream_profiling)]
 use crate::LogHistogram;
 #[cfg(stream_profiling)]
 use std::time::Instant;
 
+#[pin_project(project = InstrumentedMapProj)]
 pub struct InstrumentedMap<S, F>
 {
     #[cfg(stream_profiling)]
     name: String,
     #[cfg(stream_profiling)]
     hist: LogHistogram,
+#[pin]
     stream: S,
     function: F
 }
@@ -40,37 +45,43 @@ impl<S, I, F, U> Stream for InstrumentedMap<S, F>
     type Item = U;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<Option<U>> {
-        let option = ready!(self.stream.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<U>>
+    {
+        let InstrumentedMapProj { name, hist, stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
         let result = match option {
             None => {
-                self.hist.print_stats(&self.name);
+                hist.print_stats(&name);
                 None
             },
             Some(item) => {
                 let start = Instant::now();
-                let result = (self.function)(item);
-                self.hist.sample_now(&start);
+                let result = (function)(item);
+                hist.sample_now(&start);
                 Some(result)
             }
         };
 
-        Async::Ready(result)
+        Poll::Ready(result)
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<Option<U>> {
-        let option = ready!(self.stream.poll());
-        Poll::Ready(option.map(|item| (self.function)(item) ))
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<U>>
+    {
+        let InstrumentedMapProj { stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
+        Poll::Ready(option.map(|item| (function)(item) ))
     }
 }
 
+#[pin_project(project = InstrumentedMapChunkedProj)]
 pub struct InstrumentedMapChunked<S, F>
 {
     #[cfg(stream_profiling)]
     name: String,
     #[cfg(stream_profiling)]
     hist: LogHistogram,
+#[pin]
     stream: S,
     function: F
 }
@@ -103,17 +114,19 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
     //type Item = std::iter::Map<C::IntoIter, F>;
 
     #[cfg(stream_profiling)]
-    fn poll(&mut self) -> Poll<Option<Self::Item>> {
-        let option = ready!(self.stream.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let InstrumentedMapChunkedProj { name, hist, stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
         let result =  match option {
             None => {
-                self.hist.print_stats(&self.name);
+                hist.print_stats(&name);
                 None
             },
             Some(chunk) => {
                 let start = Instant::now();
-                let out_chunk:Self::Item = chunk.into_iter().map(&mut self.function).collect();
-                self.hist.sample_now_chunk(out_chunk.len(), &start);
+                let out_chunk:Self::Item = chunk.into_iter().map(&mut function).collect();
+                hist.sample_now_chunk(out_chunk.len(), &start);
                 Some(out_chunk)
             }
         };
@@ -121,11 +134,13 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
     }
 
     #[cfg(not(stream_profiling))]
-    fn poll(&mut self) -> Poll<Option<Self::Item>> {
-        let option = ready!(self.stream.poll());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
+    {
+        let InstrumentedMapChunkedProj { stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
         let result = option.map(|chunk|
             {
-                chunk.into_iter().map(&mut self.function).collect()
+                chunk.into_iter().map(&mut function).collect()
             });
 
         Poll::Ready(result)

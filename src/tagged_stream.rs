@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures::ready;
 use futures::Stream;
 use futures::task::{Poll, Context};
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 
 pub struct Tag<I> {
     seq_nr: usize,
@@ -56,7 +56,7 @@ impl<I> AsRef<I> for Tag<I> {
     }
 }
 
-#[pin_project]
+#[pin_project(project = TaggedStreamProj)]
 pub struct TaggedStream<S>
 {
     #[pin]
@@ -80,11 +80,9 @@ impl<S:Stream> Stream for TaggedStream<S> {
 
     type Item = Tag<S::Item>;
     
-    #[project]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        #[project]
-        let TaggedStream { stream, seq_nr } = self.project();
+        let TaggedStreamProj { stream, seq_nr } = self.project();
         let option = ready!(stream.poll_next(cx));
         let result = match option {
             None => {
@@ -104,7 +102,7 @@ impl<S:Stream> Stream for TaggedStream<S> {
 }
 
 
-#[pin_project]
+#[pin_project(project = MapProj)]
 pub struct Map<S, F>
 {
     #[pin]
@@ -118,11 +116,9 @@ where S: Stream<Item=Tag<I>>,
 {
     type Item = Tag<U>;
 
-    #[project]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Tag<U>>>
     {
-        #[project]
-        let Map { stream, function } = self.project();
+        let MapProj { stream, function } = self.project();
         let option = ready!(stream.poll_next(cx));
         let result = option.map(|t| t.map(&mut function));
         Poll::Ready(result)
@@ -133,22 +129,17 @@ where S: Stream<Item=Tag<I>>,
     }
 }
 
-#[pin_project]
-pub struct Untag<S>(
-#[pin]
-S
-);
+#[pin_project(project = UntagProj)]
+pub struct Untag<S>(#[pin] S);
 
 impl<S, I> Stream for Untag<S>
 where S: Stream<Item=Tag<I>>,
 {
     type Item = I;
 
-    #[project]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<I>>
     {
-        #[project]
-        let Untag (stream) = self.project();
+        let UntagProj (stream) = self.project();
         let async_item = ready!(stream.poll_next(cx));
         let result = async_item.map(|t| t.untag());
         Poll::Ready(result)

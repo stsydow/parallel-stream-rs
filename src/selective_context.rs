@@ -1,6 +1,7 @@
 use futures::ready;
 use futures::task::{Poll, Context};
 use std::pin::Pin;
+use pin_project::pin_project;
 use futures::prelude::*;
 use std::collections::{HashMap, hash_map::Entry};
 use std::hash::Hash;
@@ -10,6 +11,7 @@ use crate::LogHistogram;
 #[cfg(stream_profiling)]
 use std::time::Instant;
 
+#[pin_project(project = SelectiveContextProj)]
 pub struct SelectiveContext<Key, Ctx, InStream, FInit, FSel, FWork> {
     #[cfg(stream_profiling)]
     name: String,
@@ -19,6 +21,7 @@ pub struct SelectiveContext<Key, Ctx, InStream, FInit, FSel, FWork> {
     selector: FSel,
     work: FWork,
     context_map: HashMap<Key, Ctx>,
+    #[pin]
     input: InStream,
 }
 
@@ -46,23 +49,6 @@ where
             context_map: HashMap::new(),
             input,
         }
-    }
-
-    fn apply(&mut self, event: InStream::Item) -> R {
-        let key = (self.selector)(&event);
-
-        //let work_fn = &mut self.work;
-        let context = match self.context_map.entry(key) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let inital_ctx = (&self.ctx_init)(entry.key());
-                entry.insert(inital_ctx)
-            }
-        };
-        //work_fn(context, event)
-        (self.work)(context, event)
-
-        //TODO decide / implement context termination (via work()'s Return Type? An extra function? Timeout registration? )
     }
 }
 
@@ -108,22 +94,35 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let async_event = ready!(self.input.poll_next(cx));
+        let this = self.project();
+        let async_event = ready!(this.input.poll_next(cx));
         let result = match async_event {
             Some(event) => {
                 #[cfg(stream_profiling)]
                 let start = Instant::now();
 
-                let result = self.apply(event);
+                //fn apply(&mut self, event: InStream::Item) -> R {
+                let key = (this.selector)(&event);
+
+                let context = match this.context_map.entry(key) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        let inital_ctx = (&this.ctx_init)(entry.key());
+                        entry.insert(inital_ctx)
+                    }
+                };
+                let result = (this.work)(context, event);
+                //TODO decide / implement context termination (via work()'s Return Type? An extra function? Timeout registration? )
+
 
                 #[cfg(stream_profiling)]
-                self.hist.sample_now(&start);
+                this.hist.sample_now(&start);
 
                 Some(result)
             },
             None => {
                 #[cfg(stream_profiling)]
-                self.hist.print_stats(&self.name);
+                this.hist.print_stats(&this.name);
 
                 None
             },
@@ -133,6 +132,7 @@ where
     }
 }
 
+#[pin_project(project = SelectiveContextBufferdProj)]
 pub struct SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
 {
     #[cfg(stream_profiling)]
@@ -143,6 +143,7 @@ pub struct SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
     selector: FSel,
     work: FWork,
     context_map:HashMap<Key, Ctx>,
+    #[pin]
     input:InStream
 }
 
@@ -228,7 +229,8 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let async_chunk = ready!(self.input.poll_next(cx));
+        let this = self.project();
+        let async_chunk = ready!(this.input.poll_next(cx));
 
         let result = match async_chunk {
             Some(chunk)=> {
@@ -236,7 +238,19 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
                 #[cfg(stream_profiling)]
                 let start = Instant::now();
 
-                let result_chunk:Self::Item = chunk.into_iter().map(|e| self.apply(e)).collect();
+                let result_chunk:Self::Item = chunk.into_iter().map(|event| {
+                //fn apply(&mut self, event: InStream::Item) -> R {
+                    let key = (this.selector)(&event);
+
+                    let context = match this.context_map.entry(key) {
+                        Entry::Occupied(entry) => entry.into_mut(),
+                        Entry::Vacant(entry) => {
+                            let inital_ctx = (&this.ctx_init)(entry.key());
+                            entry.insert(inital_ctx)
+                        }
+                    };
+                    (this.work)(context, event)
+                }).collect();
                 /*
                 let mut result_chunk = Vec::with_capacity(chunk.len());
 
@@ -247,13 +261,13 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
                 */
 
                 #[cfg(stream_profiling)]
-                self.hist.sample_now_chunk(result_chunk.len(), &start);
+                this.hist.sample_now_chunk(result_chunk.len(), &start);
 
                 Some(result_chunk)
             },
             None => {
                 #[cfg(stream_profiling)]
-                self.hist.print_stats(&self.name);
+                this.hist.print_stats(&this.name);
                 None
             }
         };

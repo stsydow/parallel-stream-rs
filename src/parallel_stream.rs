@@ -1,7 +1,5 @@
-use futures::task::{Poll, Context};
 use futures::prelude::*;
 use std::hash::Hash;
-use std::future::IntoFuture;
 
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::runtime::Handle;
@@ -171,7 +169,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         ParallelStream<InstrumentedFold<S, F, Fut, T>>
         where Finit: Fn() -> T + Copy,
               F: Fn(T, S::Item) -> Fut + Copy,
-              Fut: IntoFuture<Output = T>,
+              Fut: Future<Output = T>,
 
     {
         self.add_stage(|s| s.instrumented_fold(init(), f, name.clone()))
@@ -181,7 +179,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
         ParallelStream<futures::stream::Fold<S, F, Fut, T>>
         where Finit: Fn() -> T + Copy,
               F: Fn(T, S::Item) -> Fut + Copy,
-              Fut: IntoFuture<Output = T>,
+              Fut: Future<Output = T>,
 
     {
         self.add_stage(|s| s.fold(init(), f))
@@ -223,7 +221,7 @@ impl<R: Future> ParallelStream<R>
     pub fn merge<Fut, T, F>(self, init: T, f:F, exec: &mut Handle) ->
         futures::stream::Fold<Receiver<R::Output>, F, Fut, T>
         where F: FnMut(T, R::Output) -> Fut,
-              Fut: IntoFuture<Output = T>,
+              Fut: Future<Output = T>,
               R::Output: Send + 'static,
               R: Send + 'static,
 
@@ -285,7 +283,7 @@ impl<S: Stream, C> ParallelStream<S>
         where S: 'static,
               Finit: Fn() -> T + Copy + 'static,
               F: FnMut(T, C::Item) -> Fut + Copy + 'static,
-              Fut: IntoFuture<Item = T>,
+              Fut: Future<Item = T>,
               S::Error: From<Fut::Error>,
               //Self: Sized,
 

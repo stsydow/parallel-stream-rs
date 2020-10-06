@@ -1,6 +1,7 @@
 use futures::ready;
 use futures::task::{Poll, Context};
 use std::pin::Pin;
+use pin_project::pin_project;
 use futures::prelude::*;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -36,7 +37,7 @@ impl<I> Eq for TaggedQueueItem<I> {}
 */
 
 struct Input<S:Stream> {
-    stream: Option<S>,
+    stream: Option<Pin<Box<S>>>,
     buffer: Vec<S::Item> // Tag<_>
 }
 
@@ -46,8 +47,10 @@ impl<S:Stream> Input<S> {
     }
 }
 
+#[pin_project(project = JoinTaggedProj)]
 pub struct JoinTagged<S:Stream>
 {
+    #[pin]
     pipelines: Vec<Input<S>>,
     next_tag: usize,
 }
@@ -64,7 +67,7 @@ pub fn join_tagged<S:Stream>(par_stream: ParallelStream<S>) -> JoinTagged<S>
     let mut pipelines = Vec::with_capacity(degree);
     let streams: Vec<S> = par_stream.into();
     for stream in streams {
-        pipelines.push( Input{ stream: Some(stream), buffer: Vec::new()});
+        pipelines.push( Input{ stream: Some(Box::pin(stream)), buffer: Vec::new()});
     }
 
     JoinTagged {
@@ -83,30 +86,31 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
 
-        self.pipelines.retain(|p| ! p.is_closed());
+        let JoinTaggedProj{pipelines, next_tag} = self.project();
+        pipelines.retain(|p| ! p.is_closed());
 
-        if self.pipelines.is_empty() {
+        if pipelines.is_empty() {
             return Poll::Ready(None);
         }
 
-        for i in 0 .. self.pipelines.len() {
-            let pipe = &mut self.pipelines[i];
+        for i in 0 .. pipelines.len() {
+            let pipe: &mut Input<S> = &mut pipelines[i];
 
             if pipe.buffer.len() > 0 {
                 let item = pipe.buffer.first().unwrap();
-                if item.nr() == self.next_tag {
+                if item.nr() == *next_tag {
                     let item = pipe.buffer.pop().unwrap();
-                    self.next_tag += 1;
+                    *next_tag += 1;
                     return Poll::Ready(Some(item));
                 }
                 //continue;
             } else {
-                if let Some(stream) = &mut pipe.stream {
-                    match stream.poll_next(cx) {
+                if let Some(ref mut stream) = &mut pipe.stream {
+                    match Pin::new(stream).poll_next(cx) {
                         Poll::Ready(Some(item)) => {
-                            assert!(item.nr() >= self.next_tag);
-                            if item.nr() == self.next_tag {
-                                self.next_tag += 1;
+                            assert!(item.nr() >= *next_tag);
+                            if item.nr() == *next_tag {
+                                *next_tag += 1;
                                 return Poll::Ready(Some(item));
                             } else {
                                 pipe.buffer.push(item);
@@ -115,7 +119,7 @@ where
                         },
                         Poll::Ready(None) => {
                             pipe.stream = None;
-                            return self.poll();
+                            return self.poll_next(cx);
                         },
                         Poll::Pending => {
                             //continue;
@@ -160,12 +164,14 @@ impl<Event> PartialEq for QueueItem<Event> {
 
 impl<Event> Eq for QueueItem<Event> {}
 
+#[pin_project(project = JoinProj)]
 pub struct Join<EventStream, FOrd>
 where
     EventStream: Stream, //where FOrd: Fn(&Event) -> u64
 {
     calc_order: FOrd,
-    pipelines: Vec<EventStream>,
+    #[pin]
+    pipelines: Vec<Pin<Box<EventStream>>>,
     last_values: BinaryHeap<QueueItem<EventStream::Item>>,
 }
 
@@ -183,7 +189,7 @@ where
     }
 
     pub fn add(&mut self, stream: EventStream) {
-        self.pipelines.push(stream);
+        self.pipelines.push(Box::pin(stream));
         self.last_values.push(QueueItem {
             event: None,
             order: 0,
@@ -201,16 +207,19 @@ where
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        match self.last_values.peek() {
+
+        let JoinProj{calc_order, pipelines, last_values} = self.project();
+        match last_values.peek() {
             Some(q_item) => {
                 let index = q_item.pipeline_index;
-                let async_event = ready!(self.pipelines[index].poll_next(cx)); //leave on error
+                let pipe = pipelines[index].as_mut();
+                let async_event = ready!(pipe.poll_next(cx)); //leave on error
 
-                let old_event = self.last_values.pop().unwrap().event; //peek went ok already
+                let old_event = last_values.pop().unwrap().event; //peek went ok already
                 match async_event {
                     Some(new_event) => {
-                        let key = (self.calc_order)(&new_event);
-                        self.last_values.push(QueueItem {
+                        let key = (calc_order)(&new_event);
+                        last_values.push(QueueItem {
                             event: Some(new_event),
                             order: key,
                             pipeline_index: index,

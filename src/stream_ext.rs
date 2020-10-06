@@ -8,7 +8,6 @@ use crate::tagged_stream;
 use crate::{TaggedStream, ParallelStream};
 
 use futures::prelude::*;
-use std::future::IntoFuture;
 use tokio::sync::mpsc::{Receiver, channel};
 use tokio::runtime::Handle;
 
@@ -26,7 +25,7 @@ pub trait StreamExt: Stream {
 
     fn instrumented_fold<Fut, T, F>(self, init:T, f:F, name: String) -> InstrumentedFold<Self, F, Fut, T>
         where F: FnMut(T, Self::Item) -> Fut,
-              Fut: IntoFuture<Output = T>,
+              Fut: Future<Output = T>,
               Self: Sized,
 
     {

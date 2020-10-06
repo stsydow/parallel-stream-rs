@@ -4,19 +4,16 @@ use core::pin::Pin;
 use core::task::Context;
 use std::time::{ Instant };
 use futures::ready;
+use pin_project::pin_project;
 use crate::LogHistogram;
 
-pub struct Tag<S>
-{
-    stream: S
-}
+#[pin_project(project = TagProj)]
+pub struct Tag<S>(#[pin] S);
 
 impl<S> Tag<S>
 {
     pub fn new(stream: S) -> Self {
-        Tag {
-            stream
-        }
+        Tag(stream)
     }
 }
 
@@ -27,16 +24,19 @@ impl<S, I>  Stream for Tag<S>
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let maybe_item = ready!(self.stream.poll_next(cx));
-        Async::Ready( maybe_item.map(|item| (Instant::now(), item)))
+        let tag = self.project();
+        let maybe_item = ready!(tag.0.poll_next(cx));
+        Poll::Ready( maybe_item.map(|item| (Instant::now(), item)))
     }
 }
 
+#[pin_project(project = MeterProj)]
 pub struct Meter<S>
 {
     name: String,
     hist: LogHistogram,
     last_stamp: Option<Instant>,
+#[pin]
     stream: S
 }
 
@@ -59,21 +59,22 @@ impl<S, I>  Stream for Meter<S>
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let result = self.stream.poll_next(cx);
+        let MeterProj { name, hist, last_stamp, stream } = self.project();
+        let result = stream.poll_next(cx);
         let now = Instant::now();
         match result {
             Poll::Pending => {
 
             },
             Poll::Ready(None) => {
-                self.hist.print_stats(&self.name);
+                hist.print_stats(&name);
             },
             Poll::Ready(Some(ref _item)) => {
-                if let Some(last_time) = self.last_stamp {
-                    let diff = now.duration_since(last_time).as_nanos() as u64;
-                    self.hist.add_sample_ns(diff);
+                if let Some(last_time) = last_stamp {
+                    let diff = now.duration_since(*last_time).as_nanos() as u64;
+                    hist.add_sample_ns(diff);
                 }
-                self.last_stamp = Some(now);
+                *last_stamp = Some(now);
             }
         };
 
@@ -81,10 +82,12 @@ impl<S, I>  Stream for Meter<S>
     }
 }
 
+#[pin_project(project = ProbeProj)]
 pub struct Probe<S>
 {
     name: String,
     hist: LogHistogram,
+#[pin]
     stream: S
 }
 
@@ -107,17 +110,18 @@ impl<S, I>  Stream for Probe<S>
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let result = self.stream.poll_next(cx);
+        let ProbeProj { name, hist, stream } = self.project();
+        let result = stream.poll_next(cx);
 
         match result {
             Poll::Pending => {
 
             },
             Poll::Ready(None) => {
-                self.hist.print_stats(&self.name);
+                hist.print_stats(&name);
             },
             Poll::Ready(Some((ref time, ref _item))) => {
-                self.hist.sample_now(time);
+                hist.sample_now(time);
             }
         };
 
@@ -125,8 +129,10 @@ impl<S, I>  Stream for Probe<S>
     }
 }
 
+#[pin_project(project = MapProj)]
 pub struct Map<S, F>
 {
+#[pin]
     stream: S,
     function: F
 }
@@ -152,8 +158,9 @@ where S: Stream<Item=(Instant, I)>,
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<(Instant, U)>>
     {
-        let option = ready!(self.stream.poll_next(cx));
-        let result = option.map(|(timestamp, item)| (timestamp, (self.function)(item)) );
+        let MapProj { stream, function } = self.project();
+        let option = ready!(stream.poll_next(cx));
+        let result = option.map(|(timestamp, item)| (timestamp, (function)(item)) );
         Poll::Ready(result)
     }
 }
