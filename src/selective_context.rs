@@ -107,7 +107,7 @@ where
                 let context = match this.context_map.entry(key) {
                     Entry::Occupied(entry) => entry.into_mut(),
                     Entry::Vacant(entry) => {
-                        let inital_ctx = (&this.ctx_init)(entry.key());
+                        let inital_ctx = (this.ctx_init)(entry.key());
                         entry.insert(inital_ctx)
                     }
                 };
@@ -132,7 +132,7 @@ where
     }
 }
 
-#[pin_project(project = SelectiveContextBufferdProj)]
+#[pin_project(project = SelectiveContextBufferedProj)]
 pub struct SelectiveContextBuffered<Key, Ctx, InStream, FInit, FSel, FWork>
 {
     #[cfg(stream_profiling)]
@@ -229,8 +229,19 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let this = self.project();
-        let async_chunk = ready!(this.input.poll_next(cx));
+        let SelectiveContextBufferedProj {
+            #[cfg(stream_profiling)]
+            name,
+            #[cfg(stream_profiling)]
+            hist,
+            ctx_init,
+            selector,
+            work,
+            context_map,
+            input
+        } = self.project(); 
+
+        let async_chunk = ready!(input.poll_next(cx));
 
         let result = match async_chunk {
             Some(chunk)=> {
@@ -240,16 +251,16 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
 
                 let result_chunk:Self::Item = chunk.into_iter().map(|event| {
                 //fn apply(&mut self, event: InStream::Item) -> R {
-                    let key = (this.selector)(&event);
+                    let key = (selector)(&event);
 
-                    let context = match this.context_map.entry(key) {
+                    let context = match context_map.entry(key) {
                         Entry::Occupied(entry) => entry.into_mut(),
                         Entry::Vacant(entry) => {
-                            let inital_ctx = (&this.ctx_init)(entry.key());
+                            let inital_ctx = (ctx_init)(entry.key());
                             entry.insert(inital_ctx)
                         }
                     };
-                    (this.work)(context, event)
+                    (work)(context, event)
                 }).collect();
                 /*
                 let mut result_chunk = Vec::with_capacity(chunk.len());
@@ -261,13 +272,13 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
                 */
 
                 #[cfg(stream_profiling)]
-                this.hist.sample_now_chunk(result_chunk.len(), &start);
+                hist.sample_now_chunk(result_chunk.len(), &start);
 
                 Some(result_chunk)
             },
             None => {
                 #[cfg(stream_profiling)]
-                this.hist.print_stats(&this.name);
+                hist.print_stats(&this.name);
                 None
             }
         };

@@ -22,7 +22,6 @@ where S: Sink<I>,
 pub struct ChunkedFork<I, S: Sink<I>, FSel>
 {
     selector: FSel,
-    #[pin]
     pipelines: Vec<Pipe<S, I>>,
 }
 
@@ -75,7 +74,7 @@ where
 
         let this = self.project();
         for pipe in this.pipelines.iter_mut() {
-            let sink = pipe.sink.unwrap().as_mut();
+            let sink = pipe.sink.as_mut().unwrap().as_mut();
             match sink.poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
                     let buffer = pipe.buffer.take();
@@ -162,7 +161,7 @@ where
         let state = if self.try_send_all(cx)? {
             let this = self.project();
             for iter_sink in this.pipelines.iter_mut() {
-                if let Some(sink) = iter_sink.sink {
+                if let Some(ref mut sink) = iter_sink.sink {
                     if iter_sink.buffer.is_none(){
                         ready!(sink.as_mut().poll_close(cx));
                         iter_sink.sink = None;

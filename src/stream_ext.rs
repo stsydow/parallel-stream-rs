@@ -73,7 +73,7 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream_sel(self, selector, degree, buf_size, exec)
     }
 
-    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &mut Handle) -> tokio::task::JoinHandle<()>
+    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &mut Handle) -> tokio::task::JoinHandle<std::result::Result<(), ()>>
         where
             SOut: Send + 'static,
             SOut::Error: std::fmt::Debug,
@@ -81,17 +81,12 @@ pub trait StreamExt: Stream {
             Self: Sized + Send + 'static,
     {
         let task = self
+            .map(|i| Ok(i))
             .forward(sink.sink_map_err(|e| {
                 panic!("send error:{:#?}", e)
-            }))
-            .map(|(_in, _tx)| () )
-            //.and_then(|(_in, tx)| tx.flush() )
-            //.map(|_tx| () )
-            .map_err(|e| {
-                panic!("{:#?}", e)
-            });
+            }));
 
-            exec.spawn(Box::new(task))
+            exec.spawn(Box::pin(task))
             //tokio::spawn(task);
     }
 

@@ -12,7 +12,6 @@ use crate::{ParallelStream, StreamExt};
 
 #[pin_project(project = ForkRRProj)]
 pub struct ForkRR<S> {
-    #[pin]
     pipelines: Vec<Option<Pin<Box<S>>>>,
     next_index: usize,
 }
@@ -61,14 +60,15 @@ impl<S, I> Sink<I> for ForkRR<S>
     {
         let this = self.project();
         let i = *this.next_index % this.pipelines.len();
-        let sink: Pin<&mut S> = this.pipelines[i].expect("sink is already closed").as_mut();
+        let maybe_sink = &mut this.pipelines[i]; 
+        let sink: Pin<&mut S> = maybe_sink.as_mut().expect("sink is already closed").as_mut();
         sink.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
         let this = self.project();
         let i = *this.next_index % this.pipelines.len();
-        let sink = this.pipelines[i].expect("sink is already closed").as_mut();
+        let sink = this.pipelines[i].as_mut().expect("sink is already closed").as_mut();
         sink.start_send(item)?;
 
         *this.next_index += 1;
@@ -97,7 +97,7 @@ impl<S, I> Sink<I> for ForkRR<S>
     {
         let this = self.project();
         for i in 0..this.pipelines.len() {
-            if let Some(sink) = this.pipelines[i] {
+            if let Some(ref mut sink) = this.pipelines[i] {
                 ready!(sink.as_mut().poll_close(cx));
                 this.pipelines[i] = None;
             }
@@ -110,7 +110,6 @@ impl<S, I> Sink<I> for ForkRR<S>
 #[pin_project(project = ForkSelProj)]
 pub struct ForkSel<S, FSel> {
     selector: FSel,
-    #[pin]
     pipelines: Vec<Option<Pin<Box<S>>>>,
 }
 
@@ -170,7 +169,7 @@ where S: Sink<I>,
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
         let this = self.project();
         let i = (this.selector)(&item) % this.pipelines.len();
-        let sink = this.pipelines[i].expect("sink is already closed").as_mut();
+        let sink = this.pipelines[i].as_mut().expect("sink is already closed").as_mut();
         sink.start_send(item)
     }
 
@@ -196,9 +195,9 @@ where S: Sink<I>,
     {
         let this = self.project();
         for i in 0..this.pipelines.len() {
-            if let Some(sink) = this.pipelines[i] {
+            if let Some(ref mut sink) = this.pipelines[i] {
                 ready!(sink.as_mut().poll_close(cx));
-                self.pipelines[i] = None;
+                this.pipelines[i] = None;
             }
         }
 

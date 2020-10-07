@@ -68,28 +68,22 @@ pub fn tagged_stream<S:Stream>(stream: S) -> TaggedStream<S>{
     TaggedStream{stream, seq_nr: 0usize}
 }
 
-impl<S:Stream> TaggedStream<S> {
-    fn tag(&mut self, i:S::Item) -> Tag<S::Item> {
-        let r = tag(self.seq_nr, i);
-        self.seq_nr +=1;
-        r
-    }
-}
-
 impl<S:Stream> Stream for TaggedStream<S> {
 
     type Item = Tag<S::Item>;
     
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let TaggedStreamProj { stream, seq_nr } = self.project();
-        let option = ready!(stream.poll_next(cx));
+        let this = self.project();
+        let option = ready!(this.stream.poll_next(cx));
         let result = match option {
             None => {
                 None
             },
             Some(item) => {
-                Some(self.tag(item))
+                let r = tag(*this.seq_nr, item);
+                *this.seq_nr +=1;
+                Some(r)
             }
         };
 
@@ -118,7 +112,7 @@ where S: Stream<Item=Tag<I>>,
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Tag<U>>>
     {
-        let MapProj { stream, function } = self.project();
+        let MapProj { stream, mut function } = self.project();
         let option = ready!(stream.poll_next(cx));
         let result = option.map(|t| t.map(&mut function));
         Poll::Ready(result)

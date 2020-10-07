@@ -50,7 +50,6 @@ impl<S:Stream> Input<S> {
 #[pin_project(project = JoinTaggedProj)]
 pub struct JoinTagged<S:Stream>
 {
-    #[pin]
     pipelines: Vec<Input<S>>,
     next_tag: usize,
 }
@@ -119,7 +118,9 @@ where
                         },
                         Poll::Ready(None) => {
                             pipe.stream = None;
-                            return self.poll_next(cx);
+                            return Poll::Pending;
+                            //TODO rather do?: 
+                            //return self.poll_next(cx);
                         },
                         Poll::Pending => {
                             //continue;
@@ -170,7 +171,6 @@ where
     EventStream: Stream, //where FOrd: Fn(&Event) -> u64
 {
     calc_order: FOrd,
-    #[pin]
     pipelines: Vec<Pin<Box<EventStream>>>,
     last_values: BinaryHeap<QueueItem<EventStream::Item>>,
 }
@@ -230,7 +230,7 @@ where
 
                 match old_event {
                     Some(event) => Poll::Ready(Some(event)),
-                    None => self.poll_next(cx),
+                    None => Poll::Pending //TODO rather do?: self.poll_next(cx),
                 }
             }
             None => Poll::Ready(None),
