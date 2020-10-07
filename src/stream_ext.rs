@@ -8,7 +8,8 @@ use crate::tagged_stream;
 use crate::{TaggedStream, ParallelStream};
 
 use futures::prelude::*;
-use tokio::sync::mpsc::{Receiver, channel};
+//use tokio::sync::mpsc::{Receiver, channel};
+use futures::channel::mpsc::{Receiver, channel};
 use tokio::runtime::Handle;
 
 use std::hash::Hash;
@@ -55,7 +56,7 @@ pub trait StreamExt: Stream {
         tagged_stream::tagged_stream(self)
     }
 
-    fn fork(self, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork(self, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             Self: Sized + Send + 'static,
@@ -63,7 +64,7 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream(self, degree, buf_size, exec)
     }
 
-    fn fork_sel<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<tokio::sync::mpsc::Receiver<Self::Item>>
+    fn fork_sel<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Self::Item>>
         where
             Self::Item: Send,
             FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
@@ -72,7 +73,7 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream_sel(self, selector, degree, buf_size, exec)
     }
 
-    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &mut Handle)
+    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &mut Handle) -> tokio::task::JoinHandle<()>
         where
             SOut: Send + 'static,
             SOut::Error: std::fmt::Debug,
@@ -90,7 +91,7 @@ pub trait StreamExt: Stream {
                 panic!("{:#?}", e)
             });
 
-            exec.spawn(Box::new(task)).expect("can't spawn task");
+            exec.spawn(Box::new(task))
             //tokio::spawn(task);
     }
 
@@ -152,7 +153,7 @@ pub trait StreamChunkedExt: Stream {
         selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
-    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<tokio::sync::mpsc::Receiver<Vec<Chunk::Item>>>
+    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Vec<Chunk::Item>>>
         where
             Chunk: IntoIterator,
             Chunk::Item: Send + 'static,

@@ -1,7 +1,8 @@
 use futures::prelude::*;
 use std::hash::Hash;
 
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+//use tokio::sync::mpsc::{Receiver, Sender, channel};
+use futures::channel::mpsc::{Receiver, Sender, channel};
 use tokio::runtime::Handle;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
@@ -176,7 +177,7 @@ impl<S: Stream> ParallelStream<S> //TODO this is untagged -- we need a tagged ve
     }
 
     pub fn fold<Fut, T, F, Finit>(self, init: Finit, f:F) ->
-        ParallelStream<futures::stream::Fold<S, F, Fut, T>>
+        ParallelStream<futures::stream::Fold<S, Fut, T, F>>
         where Finit: Fn() -> T + Copy,
               F: Fn(T, S::Item) -> Fut + Copy,
               Fut: Future<Output = T>,
@@ -219,7 +220,7 @@ impl<R: Future> ParallelStream<R>
     }
 
     pub fn merge<Fut, T, F>(self, init: T, f:F, exec: &mut Handle) ->
-        futures::stream::Fold<Receiver<R::Output>, F, Fut, T>
+        futures::stream::Fold<Receiver<R::Output>, Fut, T, F>
         where F: FnMut(T, R::Output) -> Fut,
               Fut: Future<Output = T>,
               R::Output: Send + 'static,
@@ -229,16 +230,13 @@ impl<R: Future> ParallelStream<R>
         let (join_tx, join_rx) = channel::<R::Output>(self.width());
         for input in self.streams {
             let tx = join_tx.clone();
-            let task = input.and_then(|result| {
+            let task = input.map(|result| {
                 tx.send(result).map_err(|e| {
                     panic!("send error:{:#?}", e)
                 })
             })
-            .map(|_tx| () )
-            .map_err(|e| {
-                panic!("{:#?}", e)
-            });
-            exec.spawn(Box::new(task)).expect("can't spawn task");
+            .map(|_tx| () );
+            let _task = exec.spawn(Box::pin(task));
         }
 
         join_rx.fold(init, f)

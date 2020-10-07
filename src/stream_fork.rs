@@ -1,22 +1,26 @@
 use futures::ready;
 use futures::task::{Poll, Context};
 use std::pin::Pin;
+use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
-use tokio::sync::mpsc::{channel, Receiver};
+//use tokio::sync::mpsc::{channel, Receiver};
+use futures::channel::mpsc::{channel, Receiver};
 use tokio::runtime::Handle;
 
 use crate::{ParallelStream, StreamExt};
 
+#[pin_project(project = ForkRRProj)]
 pub struct ForkRR<S> {
-    pipelines: Vec<Option<S>>,
+    #[pin]
+    pipelines: Vec<Option<Pin<Box<S>>>>,
     next_index: usize,
 }
 
 pub fn fork_rr<I, S:Sink<I>>(sinks: Vec<S>) -> ForkRR<S> {
     let mut pipelines = Vec::with_capacity(sinks.len());
     for s in sinks {
-        pipelines.push(Some(s));
+        pipelines.push(Some(Box::pin(s)));
     }
     assert!(!pipelines.is_empty());
 
@@ -55,17 +59,19 @@ impl<S, I> Sink<I> for ForkRR<S>
         cx: &mut Context) 
     -> Poll<Result<(), Self::Error>> 
     {
-        let i = self.next_index % self.pipelines.len();
-        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
+        let this = self.project();
+        let i = *this.next_index % this.pipelines.len();
+        let sink: Pin<&mut S> = this.pipelines[i].expect("sink is already closed").as_mut();
         sink.poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-        let i = self.next_index % self.pipelines.len();
-        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
+        let this = self.project();
+        let i = *this.next_index % this.pipelines.len();
+        let sink = this.pipelines[i].expect("sink is already closed").as_mut();
         sink.start_send(item)?;
 
-        self.next_index += 1;
+        *this.next_index += 1;
         Ok(())
     }
 
@@ -74,9 +80,10 @@ impl<S, I> Sink<I> for ForkRR<S>
         cx: &mut Context) 
         -> Poll<Result<(), Self::Error>>
     {
-        for iter_sink in self.pipelines.iter_mut() {
+        let this = self.project();
+        for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.poll_flush(cx));
+                ready!(sink.as_mut().poll_flush(cx));
             }
         }
 
@@ -88,10 +95,11 @@ impl<S, I> Sink<I> for ForkRR<S>
         cx: &mut Context) 
         -> Poll<Result<(), Self::Error>>
     {
-        for i in 0..self.pipelines.len() {
-            if let Some(sink) = &mut self.pipelines[i] {
-                ready!(sink.poll_close(cx));
-                self.pipelines[i] = None;
+        let this = self.project();
+        for i in 0..this.pipelines.len() {
+            if let Some(sink) = this.pipelines[i] {
+                ready!(sink.as_mut().poll_close(cx));
+                this.pipelines[i] = None;
             }
         }
 
@@ -99,9 +107,11 @@ impl<S, I> Sink<I> for ForkRR<S>
     }
 }
 
+#[pin_project(project = ForkSelProj)]
 pub struct ForkSel<S, FSel> {
     selector: FSel,
-    pipelines: Vec<Option<S>>,
+    #[pin]
+    pipelines: Vec<Option<Pin<Box<S>>>>,
 }
 
 pub fn fork_sel<I, S:Sink<I>, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S, FSel>
@@ -109,7 +119,7 @@ pub fn fork_sel<I, S:Sink<I>, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S,
 {
     ForkSel {
         selector,
-        pipelines: sinks.into_iter().map( |s| Some(s) ).collect(),
+        pipelines: sinks.into_iter().map( |s| Some(Box::pin(s)) ).collect(),
     }
 }
 
@@ -147,9 +157,10 @@ where S: Sink<I>,
         cx: &mut Context) 
         -> Poll<Result<(), Self::Error>>
     {
-        for iter_sink in self.pipelines.iter_mut() {
+        let this = self.project();
+        for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.poll_ready(cx));
+                ready!(sink.as_mut().poll_ready(cx));
             }
         }
 
@@ -157,8 +168,9 @@ where S: Sink<I>,
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
-        let i = (self.selector)(&item) % self.pipelines.len();
-        let sink = &mut self.pipelines[i].as_mut().expect("sink is already closed");
+        let this = self.project();
+        let i = (this.selector)(&item) % this.pipelines.len();
+        let sink = this.pipelines[i].expect("sink is already closed").as_mut();
         sink.start_send(item)
     }
 
@@ -167,9 +179,10 @@ where S: Sink<I>,
         cx: &mut Context) 
         -> Poll<Result<(), Self::Error>>
     {
-        for iter_sink in self.pipelines.iter_mut() {
+        let this = self.project();
+        for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.poll_flush(cx));
+                ready!(sink.as_mut().poll_flush(cx));
             }
         }
 
@@ -181,9 +194,10 @@ where S: Sink<I>,
         cx: &mut Context) 
         -> Poll<Result<(), Self::Error>>
     {
-        for i in 0..self.pipelines.len() {
-            if let Some(sink) = &mut self.pipelines[i] {
-                ready!(sink.poll_close(cx));
+        let this = self.project();
+        for i in 0..this.pipelines.len() {
+            if let Some(sink) = this.pipelines[i] {
+                ready!(sink.as_mut().poll_close(cx));
                 self.pipelines[i] = None;
             }
         }

@@ -1,9 +1,11 @@
 use futures::ready;
 use futures::task::{Poll, Context};
 use std::pin::Pin;
+use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
-use tokio::sync::mpsc::{channel, Receiver};
+//use tokio::sync::mpsc::{channel, Receiver};
+use futures::channel::mpsc::{channel, Receiver};
 use tokio::runtime::Handle;
 
 use crate::{ParallelStream, StreamExt};
@@ -12,13 +14,15 @@ use std::iter::FromIterator;
 struct Pipe<S, I>
 where S: Sink<I>,
 {
-    sink: Option<S>,
+    sink: Option<Pin<Box<S>>>,
     buffer: Option<I>,
 }
 
+#[pin_project(project = ChunkedForkProj)]
 pub struct ChunkedFork<I, S: Sink<I>, FSel>
 {
     selector: FSel,
+    #[pin]
     pipelines: Vec<Pipe<S, I>>,
 }
 
@@ -31,7 +35,7 @@ where
 {
     ChunkedFork {
         selector,
-        pipelines: sinks.into_iter().map( |s| Pipe{sink: Some(s), buffer:  None} ).collect(),
+        pipelines: sinks.into_iter().map( |s| Pipe{sink: Some(Box::pin(s)), buffer:  None} ).collect(),
     }
 }
 
@@ -66,13 +70,14 @@ where
         })
     }
 
-    pub fn try_send_all(&mut self, cx: &mut Context) -> Result<bool,S::Error> {
+    pub fn try_send_all(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool,S::Error> {
         let mut all_empty = true;
 
-        for pipe in self.pipelines.iter_mut() {
-            let sink = pipe.sink.as_mut().unwrap();
+        let this = self.project();
+        for pipe in this.pipelines.iter_mut() {
+            let sink = pipe.sink.unwrap().as_mut();
             match sink.poll_ready(cx) {
-                Poll::Ready(Ok()) => {
+                Poll::Ready(Ok(())) => {
                     let buffer = pipe.buffer.take();
                     if let Some(buf) = buffer {
                         sink.start_send(buf)?
@@ -106,7 +111,7 @@ where
         cx: &mut Context
         ) -> Poll<Result<(), Self::Error>> 
     {
-        if !self.try_send_all()? {
+        if !self.try_send_all(cx)? {
             return Poll::Pending;
         }
         Poll::Ready(Ok(()))
@@ -114,17 +119,17 @@ where
 
     fn start_send(self: Pin<&mut Self>, chunk: Vec<I>) -> Result<(), Self::Error> {
 
-        let degree = self.pipelines.len();
+        let this = self.project();
+        let degree = this.pipelines.len();
 
         for item in chunk {
-            let i = (self.selector)(&item) % degree;
-            if let Some(ref mut buf) = self.pipelines[i].buffer {
+            let i = (this.selector)(&item) % degree;
+            if let Some(ref mut buf) = this.pipelines[i].buffer {
                 buf.push(item);
             }else {
-                self.pipelines[i].buffer = Some(vec![item]);
+                this.pipelines[i].buffer = Some(vec![item]);
             }
         }
-        self.try_send_all()?;
 
         Ok(())
     }
@@ -134,10 +139,11 @@ where
         cx: &mut Context
     ) -> Poll<Result<(), Self::Error>> {
 
-        let state = if self.try_send_all()? {
-            for iter_sink in self.pipelines.iter_mut() {
+        let state = if self.try_send_all(cx)? {
+            let this = self.project();
+            for iter_sink in this.pipelines.iter_mut() {
                 if let Some(ref mut sink) = iter_sink.sink {
-                    ready!(sink.poll_flush(cx));
+                    ready!(sink.as_mut().poll_flush(cx));
                 }
             }
             Poll::Ready(Ok(()))
@@ -153,11 +159,12 @@ where
         cx: &mut Context
     ) -> Poll<Result<(), Self::Error>> {
 
-        let state = if self.try_send_all()? {
-            for iter_sink in self.pipelines.iter_mut() {
-                if let Some(ref mut sink) = iter_sink.sink {
+        let state = if self.try_send_all(cx)? {
+            let this = self.project();
+            for iter_sink in this.pipelines.iter_mut() {
+                if let Some(sink) = iter_sink.sink {
                     if iter_sink.buffer.is_none(){
-                        ready!(sink.poll_close(cx));
+                        ready!(sink.as_mut().poll_close(cx));
                         iter_sink.sink = None;
                     } else {
                          return Poll::Pending;
