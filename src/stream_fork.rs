@@ -83,7 +83,10 @@ impl<S, I> Sink<I> for ForkRR<S>
         let this = self.project();
         for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.as_mut().poll_flush(cx));
+                let r = ready!(sink.as_mut().poll_flush(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
+                }
             }
         }
 
@@ -98,7 +101,10 @@ impl<S, I> Sink<I> for ForkRR<S>
         let this = self.project();
         for i in 0..this.pipelines.len() {
             if let Some(ref mut sink) = this.pipelines[i] {
-                ready!(sink.as_mut().poll_close(cx));
+                let r = ready!(sink.as_mut().poll_close(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
+                }
                 this.pipelines[i] = None;
             }
         }
@@ -159,7 +165,10 @@ where S: Sink<I>,
         let this = self.project();
         for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.as_mut().poll_ready(cx));
+                let r = ready!(sink.as_mut().poll_ready(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
+                }
             }
         }
 
@@ -181,7 +190,10 @@ where S: Sink<I>,
         let this = self.project();
         for iter_sink in this.pipelines.iter_mut() {
             if let Some(sink) = iter_sink {
-                ready!(sink.as_mut().poll_flush(cx));
+                let r = ready!(sink.as_mut().poll_flush(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
+                }
             }
         }
 
@@ -196,7 +208,10 @@ where S: Sink<I>,
         let this = self.project();
         for i in 0..this.pipelines.len() {
             if let Some(ref mut sink) = this.pipelines[i] {
-                ready!(sink.as_mut().poll_close(cx));
+                let r = ready!(sink.as_mut().poll_close(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
+                }
                 this.pipelines[i] = None;
             }
         }

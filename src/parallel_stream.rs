@@ -229,16 +229,13 @@ impl<R: Future> ParallelStream<R>
     {
         let (join_tx, join_rx) = channel::<R::Output>(self.width());
         for input in self.streams {
-            let task = {
-                let mut tx = join_tx.clone();
-                input.map(move |result| {
-                    tx.send(result).map_err(|e| {
-                        panic!("send error:{:#?}", e)
-                    });
+            let tx = Box::leak(Box::new(join_tx.clone()));
+            let task = input.then(move |result| {
+                tx.send(result).map_err(|e| {
+                    panic!("send error:{:#?}", e)
                 })
-            };
-            //.map(|_tx| () );
-            let _task = exec.spawn(Box::pin(task));
+            });
+            let _task_handle = exec.spawn(Box::pin(task));
         }
 
         join_rx.fold(init, f)

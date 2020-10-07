@@ -173,22 +173,6 @@ impl<Chunk, R, Key, Ctx, InStream, FInit, FSel, FWork> SelectiveContextBuffered<
             input
         }
     }
-
-    fn apply(&mut self, event: Chunk::Item) -> R {
-        let key = (self.selector)(&event);
-
-        let work_fn = &mut self.work;
-        let context = match self.context_map.entry(key) {
-            Entry::Occupied(entry) => entry.into_mut(),
-            Entry::Vacant(entry) => {
-                let inital_ctx = (&self.ctx_init)(entry.key());
-                entry.insert(inital_ctx)
-            }
-        };
-        work_fn(context, event)
-
-        //TODO decide / implement context termination (via work()'s Return Type? An extra function? Timeout registration? )
-    }
 }
 
 pub fn selective_context_buffered<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> (input:InStream, ctx_builder: CtxInit, selector: FSel, work: FWork, name: String) -> SelectiveContextBuffered<Key, Ctx, InStream, CtxInit, FSel, FWork>

@@ -38,7 +38,6 @@ where
     }
 }
 
-
 pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<Receiver<Vec<C::Item>>>
 where
     C: IntoIterator,
@@ -68,32 +67,28 @@ where
             pipe.buffer.is_none()
         })
     }
-
-    pub fn try_send_all(self: Pin<&mut Self>, cx: &mut Context) -> Result<bool,S::Error> {
-        let mut all_empty = true;
-
-        let this = self.project();
-        for pipe in this.pipelines.iter_mut() {
+    fn poll_ready(
+        &mut self,
+        cx: &mut Context<'_>
+        ) -> Poll<Result<(), S::Error>> 
+    {
+        for pipe in self.pipelines.iter_mut() {
             let sink = pipe.sink.as_mut().unwrap().as_mut();
             match sink.poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
-                    let buffer = pipe.buffer.take();
-                    if let Some(buf) = buffer {
-                        sink.start_send(buf)?
-
-                    }
+                    //continue;
                     ()
                 },
                 Poll::Ready(Err(e)) => {
-                    return Err(e)        
+                    return Poll::Ready(Err(e))        
                 },
                 Poll::Pending => {
-                        all_empty = false;
+                    return Poll::Pending;
                 }
             }
         }
 
-        Ok(all_empty)
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -106,14 +101,11 @@ where
     type Error = S::Error;
 
     fn poll_ready(
-        self: Pin<&mut Self>,
-        cx: &mut Context
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>
         ) -> Poll<Result<(), Self::Error>> 
     {
-        if !self.try_send_all(cx)? {
-            return Poll::Pending;
-        }
-        Poll::Ready(Ok(()))
+        (*self).poll_ready(cx)
     }
 
     fn start_send(self: Pin<&mut Self>, chunk: Vec<I>) -> Result<(), Self::Error> {
@@ -130,6 +122,14 @@ where
             }
         }
 
+        for pipe in this.pipelines.iter_mut() {
+            let sink = pipe.sink.as_mut().unwrap().as_mut();
+            let buffer = pipe.buffer.take();
+            if let Some(buf) = buffer {
+                sink.start_send(buf)?
+            }
+        }
+
         Ok(())
     }
 
@@ -138,19 +138,16 @@ where
         cx: &mut Context
     ) -> Poll<Result<(), Self::Error>> {
 
-        let state = if self.try_send_all(cx)? {
-            let this = self.project();
-            for iter_sink in this.pipelines.iter_mut() {
-                if let Some(ref mut sink) = iter_sink.sink {
-                    ready!(sink.as_mut().poll_flush(cx));
+        let this = self.project();
+        for iter_sink in this.pipelines.iter_mut() {
+            if let Some(ref mut sink) = iter_sink.sink {
+                let r = ready!(sink.as_mut().poll_flush(cx));
+                if let Err(_) = r {
+                    return Poll::Ready(r);
                 }
             }
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        };
-
-        state
+        }
+        Poll::Ready(Ok(()))
     }
 
     fn poll_close(
@@ -158,23 +155,20 @@ where
         cx: &mut Context
     ) -> Poll<Result<(), Self::Error>> {
 
-        let state = if self.try_send_all(cx)? {
-            let this = self.project();
-            for iter_sink in this.pipelines.iter_mut() {
-                if let Some(ref mut sink) = iter_sink.sink {
-                    if iter_sink.buffer.is_none(){
-                        ready!(sink.as_mut().poll_close(cx));
-                        iter_sink.sink = None;
-                    } else {
-                         return Poll::Pending;
+        let this = self.project();
+        for iter_sink in this.pipelines.iter_mut() {
+            if let Some(ref mut sink) = iter_sink.sink {
+                if iter_sink.buffer.is_none(){
+                    let r = ready!(sink.as_mut().poll_close(cx));
+                    if let Err(_) = r {
+                        return Poll::Ready(r);
                     }
+                    iter_sink.sink = None;
+                } else {
+                    return Poll::Pending;
                 }
             }
-            Poll::Ready(Ok(()))
-        } else {
-            Poll::Pending
-        };
-
-        state
+        }
+        Poll::Ready(Ok(()))
     }
 }
