@@ -38,7 +38,7 @@ where
     }
 }
 
-pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &mut Handle) -> ParallelStream<Receiver<Vec<C::Item>>>
+pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &Handle) -> ParallelStream<Receiver<Vec<C::Item>>>
 where
     C: IntoIterator,
     S: Stream<Item=C> + Send + 'static,
