@@ -116,7 +116,7 @@ impl<S, C, F, U> Stream for InstrumentedMapChunked<S, F>
     #[cfg(stream_profiling)]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>>
     {
-        let InstrumentedMapChunkedProj { name, hist, stream, function } = self.project();
+        let InstrumentedMapChunkedProj { name, hist, stream, mut function } = self.project();
         let option = ready!(stream.poll_next(cx));
         let result =  match option {
             None => {

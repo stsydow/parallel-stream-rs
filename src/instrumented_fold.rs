@@ -61,10 +61,10 @@ impl<S, F, Fut, T> Future for InstrumentedFold<S, F, Fut, T>
         Poll::Ready(loop {
             if let Some(fut) = future.as_mut().as_pin_mut() {
                 // we're currently processing a future to produce a new accum value
-                unimplemented!();//TODO let start_time = Instant::now();
-                accum = Some(ready!(fut.poll(cx)));
+                let start_time = Instant::now();
+                *accum = Some(ready!(fut.poll(cx)));
                 future.set(None);
-                unimplemented!();//TODO hist.sample_now(&start_time);
+                hist.sample_now(&start_time);
             } else if accum.is_some() {
                 // we're waiting on a new item from the stream
                 let res = ready!(stream.as_mut().poll_next(cx));

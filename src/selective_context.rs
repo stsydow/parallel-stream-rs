@@ -262,7 +262,7 @@ impl<Chunk, R, Key, Ctx, InStream, CtxInit, FSel, FWork> Stream for SelectiveCon
             },
             None => {
                 #[cfg(stream_profiling)]
-                hist.print_stats(&this.name);
+                hist.print_stats(&name);
                 None
             }
         };
