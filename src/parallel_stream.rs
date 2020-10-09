@@ -1,8 +1,7 @@
 use futures::prelude::*;
 use std::hash::Hash;
 
-//use tokio::sync::mpsc::{Receiver, Sender, channel};
-use futures::channel::mpsc::{Receiver, Sender, channel};
+use crate::{Receiver, channel::Sender, channel};
 use tokio::runtime::Handle;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;

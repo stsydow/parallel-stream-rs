@@ -11,6 +11,9 @@ extern crate test;
 //pub mod util;
 //pub mod stream_group_by;
 //mod global_context; //TODO
+mod channel;
+pub use crate::channel::{channel, Receiver};
+
 mod stream_fork;
 pub use crate::stream_fork::{ForkRR, fork_rr, ForkSel, fork_sel};
 mod stream_fork_chunked;

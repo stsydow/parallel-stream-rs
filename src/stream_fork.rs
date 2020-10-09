@@ -4,11 +4,9 @@ use std::pin::Pin;
 use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
-//use tokio::sync::mpsc::{channel, Receiver};
-use futures::channel::mpsc::{channel, Receiver};
 use tokio::runtime::Handle;
 
-use crate::{ParallelStream, StreamExt};
+use crate::{ParallelStream, StreamExt, channel, Receiver};
 
 #[pin_project(project = ForkRRProj)]
 pub struct ForkRR<S> {

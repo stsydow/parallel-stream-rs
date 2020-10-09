@@ -1,6 +1,6 @@
 [package]
 name = "parallel-stream"
-version = "0.2.11"
+version = "0.3.1"
 authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
 edition = "2018"
 
@@ -11,7 +11,8 @@ log = "0.4"
 #simplelog = "0.7"
 futures = "0.3"
 bytes = "0.5"
-pin-project = "0.4"
+#pin-project = "0.4"
+pin-project = "1.0.0-alpha.1"
 
 [dependencies.tokio]
 version = "0.2"

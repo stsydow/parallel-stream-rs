@@ -4,8 +4,7 @@ use std::pin::Pin;
 use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
-//use tokio::sync::mpsc::{channel, Receiver};
-use futures::channel::mpsc::{channel, Receiver};
+use crate::{channel, Receiver};
 use tokio::runtime::Handle;
 
 use crate::{ParallelStream, StreamExt};

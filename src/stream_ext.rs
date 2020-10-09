@@ -5,11 +5,9 @@ use crate::probe_stream;
 use crate::stream_fork;
 use crate::stream_fork_chunked;
 use crate::tagged_stream;
-use crate::{TaggedStream, ParallelStream};
+use crate::{TaggedStream, ParallelStream, Receiver, channel};
 
 use futures::prelude::*;
-//use tokio::sync::mpsc::{Receiver, channel};
-use futures::channel::mpsc::{Receiver, channel};
 use tokio::runtime::Handle;
 
 use std::hash::Hash;
@@ -56,7 +54,7 @@ pub trait StreamExt: Stream {
         tagged_stream::tagged_stream(self)
     }
 
-    fn fork(self, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Self::Item>>
+    fn fork(self, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<crate::channel::Receiver<Self::Item>>
         where
             Self::Item: Send,
             Self: Sized + Send + 'static,
@@ -64,7 +62,7 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream(self, degree, buf_size, exec)
     }
 
-    fn fork_sel<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Self::Item>>
+    fn fork_sel<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<crate::channel::Receiver<Self::Item>>
         where
             Self::Item: Send,
             FSel: Fn(&Self::Item) -> usize + Copy + Send + 'static,
@@ -148,7 +146,7 @@ pub trait StreamChunkedExt: Stream {
         selective_context::selective_context_buffered(self, ctx_builder, selector, work, name)
     }
 
-    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<futures::channel::mpsc::Receiver<Vec<Chunk::Item>>>
+    fn fork_sel_chunked<FSel, Chunk>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) -> ParallelStream<crate::channel::Receiver<Vec<Chunk::Item>>>
         where
             Chunk: IntoIterator,
             Chunk::Item: Send + 'static,

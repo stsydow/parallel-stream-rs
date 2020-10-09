@@ -3,13 +3,14 @@ use std::time::Instant;
 
 //use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use futures::channel::mpsc::{Receiver, channel};
 use futures::future::{self, FutureExt};
 use futures::stream::{self, Stream, StreamExt};
 
 use test::Bencher;
 use test::black_box;
 
+//use crate::Receiver;
+use crate::channel;
 use crate::stream_fork::fork_rr;
 use crate::stream_ext::StreamExt as MyStreamExt;
 
