@@ -1,7 +1,6 @@
 use std::time::Instant;
 //use bytes::Bytes;
 
-//use tokio::prelude::*;
 use tokio::runtime::Runtime;
 use futures::future::{self, FutureExt};
 use futures::stream::{self, Stream, StreamExt};
@@ -79,7 +78,7 @@ fn iter_stream(b: &mut Bencher) {
 //#[inline(never)]
 fn dummy_stream() -> impl Stream<Item=Message> {
     stream::unfold(0, |count| async move {
-        if count <= BLOCK_COUNT {
+        if count < BLOCK_COUNT {
             let buffer = new_message(count);
             Some((buffer, count + 1))
         } else {
@@ -352,7 +351,7 @@ fn spawn(b: &mut Bencher) {
 
 fn time_stream() -> impl Stream<Item=Instant> {
     stream::unfold(0, |count| async move {
-        if count <= BLOCK_COUNT {
+        if count < BLOCK_COUNT {
             let count = count + 1;
             let t = Instant::now();
             Some((t, count))
@@ -406,6 +405,28 @@ fn channel_buf2_latency(_b: &mut Bencher) {
 
         runtime.block_on(recv_task);
     }
+}
+
+
+#[bench]
+fn fold_merge(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    let exec = Box::pin(runtime.handle());
+
+    b.iter(|| {
+        let pipeline_task = dummy_stream()
+            .fork(THREADS, 2, &exec)
+            .instrumented_fold(|| 0usize, |acc: usize, _val:Message | async move {
+                    acc + 1usize
+            }, "acc".to_owned())
+            .merge(0, |acc, part_acc| async move {
+                acc + part_acc
+            }, &exec);
+            
+        let ops = exec.block_on(pipeline_task);
+        assert_eq!(ops, BLOCK_COUNT);
+    });
+
 }
 
 #[bench]
