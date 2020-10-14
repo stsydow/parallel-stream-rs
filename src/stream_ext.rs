@@ -71,21 +71,35 @@ pub trait StreamExt: Stream {
         stream_fork::fork_stream_sel(self, selector, degree, buf_size, exec)
     }
 
-    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &Handle) -> tokio::task::JoinHandle<std::result::Result<(), ()>>
+    fn forward_and_spawn<SOut:Sink<Self::Item>>(self, sink:SOut, exec: &Handle) -> tokio::task::JoinHandle<std::result::Result<(), SOut::Error>>
         where
             SOut: Send + 'static,
-            SOut::Error: std::fmt::Debug,
+            SOut::Error: Send + std::fmt::Debug,
             Self::Item: Send,
             Self: Sized + Send + 'static,
     {
+
         let task = self
             .map(|i| Ok(i))
             .forward(sink.sink_map_err(|e| {
                 panic!("send error:{:#?}", e)
             }));
+        //let task = sink.send_all(self.map(|i| Ok(i)));
+        exec.spawn(Box::pin(task))
 
-            exec.spawn(Box::pin(task))
-            //tokio::spawn(task);
+        /*
+        exec.spawn( async move {
+            let mut self_pin = Box::pin(self);
+            let mut sink_pin = Box::pin(sink);
+            while let Some(item) = self_pin.next().await {
+                let result = sink_pin.send(item).await;
+                if result.is_err() {
+                    return result;
+                }
+            }
+            Ok(())
+        })
+        */
     }
 
     fn decouple(self, buf_size: usize, exec: &Handle) -> Receiver<Self::Item>

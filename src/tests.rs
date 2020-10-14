@@ -16,6 +16,8 @@ use crate::stream_ext::StreamExt as MyStreamExt;
 const BLOCK_COUNT:usize = 1_000;
 
 const THREADS:usize = 8;
+
+const CHANNEL_BUFFER:usize = 100;
 /*
 const BLOCK_SIZE:usize = 1<<12; //4k
 static PAYLOAD:[u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
@@ -124,6 +126,24 @@ fn async_stream_map10(b: &mut Bencher) {
 }
 
 #[bench]
+fn channel_setup(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(1);
+
+        futures::stream::once(async {new_message(1)})
+        .forward_and_spawn(tx,&mut runtime.handle());
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+
+
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
 fn channel_buf1(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
@@ -158,10 +178,336 @@ fn channel_buf2(b: &mut Bencher) {
 }
 
 #[bench]
-fn channel_buf2_chunk10(b: &mut Bencher) {
+fn channel_buf10(b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-        let (tx, rx) = channel::<Vec<Message>>(2);
+        let (tx, rx) = channel::<Message>(10);
+
+        dummy_stream().forward_and_spawn(tx,&mut runtime.handle());
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf100(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(100);
+
+        dummy_stream().forward_and_spawn(tx,&mut runtime.handle());
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+
+        runtime.block_on(recv_task);
+    });
+}
+#[bench]
+fn channel_buf1_futures(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        use futures::SinkExt;
+        let (tx, rx) = futures::channel::mpsc::channel::<Message>(1);
+        let send_task = dummy_stream()
+            .map(|i| Ok(i))
+            .forward(tx.sink_map_err(|e| {
+                panic!("send error:{:#?}", e)
+            }));
+        /*
+        let send_task = dummy_stream()
+            .fold(tx, |tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+        */
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf100_futures(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        use futures::SinkExt;
+        let (tx, rx) = futures::channel::mpsc::channel::<Message>(100);
+        
+        let send_task = dummy_stream()
+            .map(|i| Ok(i))
+            .forward(tx.sink_map_err(|e| {
+                panic!("send error:{:#?}", e)
+            }));
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf100_futures_fold(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        use futures::SinkExt;
+        let (tx, rx) = futures::channel::mpsc::channel::<Message>(100);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf1_tokio(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Message>(1);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf2_tokio(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Message>(2);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf10_tokio(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Message>(10);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+#[bench]
+fn channel_buf100_tokio(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Message>(100);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+
+#[bench]
+fn channel_buf1_smol(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = smol::channel::bounded::<Message>(1);
+
+        let send_task = dummy_stream()
+            .fold(tx, |tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf2_smol(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = smol::channel::bounded::<Message>(2);
+
+        let send_task = dummy_stream()
+            .fold(tx, |tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf10_smol(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = smol::channel::bounded::<Message>(10);
+
+        let send_task = dummy_stream()
+            .fold(tx, |tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf100_smol(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+
+        let (send_task, recv_task) = {
+        let (tx, rx) = smol::channel::bounded::<Message>(100);
+
+        let send_task = dummy_stream()
+            .fold(tx, |tx, item| async move {
+                let r = tx.send(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf10_chunk10(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let (tx, rx) = channel::<Vec<Message>>(10);
 
         dummy_stream().chunks(10).forward_and_spawn(tx,&mut runtime.handle());
 
@@ -185,9 +531,9 @@ fn fork_join(b: &mut Bencher) {
     let (fork, join) = {
         let mut senders = Vec::new();
         //let mut join = Join::new();
-        let (out_tx, out_rx) = channel::<Message>(THREADS + 1);
+        let (out_tx, out_rx) = channel::<Message>(THREADS*CHANNEL_BUFFER);
         for _i in 0 .. THREADS {
-            let (in_tx, in_rx) = channel::<Message>(2);
+            let (in_tx, in_rx) = channel::<Message>(CHANNEL_BUFFER);
 
             senders.push(in_tx);
             in_rx.forward_and_spawn(out_tx.clone(), &exec);
@@ -213,8 +559,8 @@ fn fork_join_unorderd(b: &mut Bencher) {
     let exec = runtime.handle();
     b.iter(|| {
             let pipeline = dummy_stream()
-                .fork(THREADS, 2, &exec)
-                .join_unordered(THREADS +1, &exec);
+                .fork(THREADS, CHANNEL_BUFFER, &exec)
+                .join_unordered(CHANNEL_BUFFER*THREADS, &exec);
 
             let pipeline_task = pipeline
             .for_each(|_item| async {()});
@@ -224,17 +570,84 @@ fn fork_join_unorderd(b: &mut Bencher) {
 }
 
 #[bench]
-fn shuffle(b: &mut Bencher) {
+fn shuffle_1(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     let exec = Box::pin(runtime.handle());
     b.iter(|| {
             let pipeline = dummy_stream()
-                .fork(THREADS, 2, &exec)
-                .shuffle_unordered(|i|{i * 7}, THREADS, 2, &exec)
-                .join_unordered(2*THREADS, &exec);
+                .fork(THREADS, CHANNEL_BUFFER, &exec)
+                .shuffle_unordered(|i|{*i}, THREADS, CHANNEL_BUFFER, &exec)
+                .join_unordered(CHANNEL_BUFFER*THREADS, &exec);
 
             let pipeline_task = pipeline
-            .for_each(|_item| async {()});
+            .for_each(|_item| async {
+                ()
+            });
+            
+            exec.block_on(pipeline_task);
+        });
+}
+
+#[bench]
+fn shuffle_unfair(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    let exec = Box::pin(runtime.handle());
+    b.iter(|| {
+            let pipeline = dummy_stream()
+                .fork(THREADS, CHANNEL_BUFFER, &exec)
+                .shuffle_unordered(|_i|{0}, THREADS, CHANNEL_BUFFER, &exec)
+                .join_unordered(CHANNEL_BUFFER*THREADS, &exec);
+
+            let pipeline_task = pipeline
+            .for_each(|_item| async {
+                ()
+            });
+            
+            exec.block_on(pipeline_task);
+        });
+}
+
+#[bench]
+fn shuffle_nobuffer(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    let exec = Box::pin(runtime.handle());
+    b.iter(|| {
+            let pipeline = dummy_stream()
+                .fork(THREADS, 1, &exec)
+                /*.map(|i| {
+                    eprintln!("f{}", i);
+                    i
+                })*/
+                .shuffle_unordered(|_i|{0}, THREADS, 1, &exec)
+                /*.map(|i| {
+                    eprintln!("s{}", i);
+                    i
+                })*/
+                .join_unordered(1, &exec);
+
+            let pipeline_task = pipeline
+            .for_each(|_item| async {
+                ()
+            });
+            
+            exec.block_on(pipeline_task);
+        });
+}
+
+#[bench]
+fn shuffle_random(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    let exec = Box::pin(runtime.handle());
+    b.iter(|| {
+            let pipeline = dummy_stream()
+                .fork(THREADS, CHANNEL_BUFFER, &exec)
+                .shuffle_unordered(|i|{i * 23}, THREADS, CHANNEL_BUFFER, &exec)
+                .join_unordered(CHANNEL_BUFFER*THREADS, &exec);
+
+            let pipeline_task = pipeline
+            .for_each(|_item| async {
+                ()
+            });
             
             exec.block_on(pipeline_task);
         });
@@ -362,7 +775,7 @@ fn time_stream() -> impl Stream<Item=Instant> {
 }
 
 #[bench]
-fn channel_buf1_latency(_b: &mut Bencher) {
+fn latency_channel_buf1(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     for _i in 0 .. 5 {
         let (tx, rx) = channel::<Instant>(1);
@@ -379,16 +792,15 @@ fn channel_buf1_latency(_b: &mut Bencher) {
             eprintln!("~latency:{:0.1}ns", avg_latency)
         });
 
-
         runtime.block_on(recv_task);
     };
 }
 
 #[bench]
-fn channel_buf2_latency(_b: &mut Bencher) {
+fn latency_channel_buf10(_b: &mut Bencher) {
     let mut runtime = Runtime::new().expect("can not start runtime");
     for _i in 0 .. 5 {
-        let (tx, rx) = channel::<Instant>(2);
+        let (tx, rx) = channel::<Instant>(10);
 
         time_stream().forward_and_spawn(tx, runtime.handle());
 
@@ -402,11 +814,31 @@ fn channel_buf2_latency(_b: &mut Bencher) {
             eprintln!("~latency:{:0.1}ns", avg_latency)
         });
 
-
         runtime.block_on(recv_task);
     }
 }
 
+#[bench]
+fn latency_channel_buf100_latency(_b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    for _i in 0 .. 5 {
+        let (tx, rx) = channel::<Instant>(100);
+
+        time_stream().forward_and_spawn(tx, runtime.handle());
+
+        let recv_task = rx.fold((0u128, 0usize),
+        |(sum, len), t| async move {
+            let dt = t.elapsed().as_nanos();
+            (sum + dt, len +1)
+        })
+        .map(|(sum, len)| {
+            let avg_latency = sum as f64 / len as f64;
+            eprintln!("~latency:{:0.1}ns", avg_latency)
+        });
+
+        runtime.block_on(recv_task);
+    }
+}
 
 #[bench]
 fn fold_merge(b: &mut Bencher) {
@@ -415,7 +847,7 @@ fn fold_merge(b: &mut Bencher) {
 
     b.iter(|| {
         let pipeline_task = dummy_stream()
-            .fork(THREADS, 2, &exec)
+            .fork(THREADS, CHANNEL_BUFFER, &exec)
             .instrumented_fold(|| 0usize, |acc: usize, _val:Message | async move {
                     acc + 1usize
             }, "acc".to_owned())

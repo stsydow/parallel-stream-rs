@@ -22,6 +22,7 @@ features = ["io-std", "rt-threaded", "fs", "sync", "stream"]
 
 [dev-dependencies]
 libc = "0.2"
+smol = "1.2"
 
 #[profile.release]
 #lto= "fat"

@@ -237,7 +237,6 @@ impl<R: Future> ParallelStream<R>
         }
 
         join_rx.fold(init, f)
-        //self.join_unordered(self.width(), exec).fold(init, f);
     }
 }
 

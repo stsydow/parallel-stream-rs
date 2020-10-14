@@ -40,6 +40,7 @@
 pub use futures::channel::mpsc::{channel, Receiver, Sender};
 
 /*
+
 use futures::task::{Poll, Context};
 use futures::sink::Sink;
 use std::pin::Pin;
@@ -78,12 +79,20 @@ impl<I> Sink<I> for Sender<I>
         cx: &mut Context) 
     -> Poll<Result<(), Self::Error>> 
     {
-        self.project().0.as_mut().unwrap().poll_ready(cx)
+        let inner = self.project().0.as_mut().unwrap(); 
+        let result = inner.poll_ready(cx);
+        if result.is_pending() {
+            eprintln!("is_pending: {:?}", inner);
+        }
+
+        result
+
     }
 
     fn start_send(self: Pin<&mut Self>, item: I) -> Result<(), Self::Error> {
+        let inner = self.project().0.as_mut().unwrap(); 
 
-        match self.project().0.as_mut().unwrap().try_send(item) {
+        match inner.try_send(item) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_e)) => {
                 panic!("channel full - poll_ready() must always be called before start_send().");
