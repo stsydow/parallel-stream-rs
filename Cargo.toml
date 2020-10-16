@@ -7,12 +7,12 @@ edition = "2018"
 
 [dependencies]
 argparse = "0.2"
-log = "0.4"
+#log = "0.4"
 #simplelog = "0.7"
 futures = "0.3"
 bytes = "0.5"
 #pin-project = "0.4"
-pin-project = "1.0.0-alpha.1"
+pin-project = "1"
 
 [dependencies.tokio]
 version = "0.2"
@@ -23,6 +23,12 @@ features = ["io-std", "rt-threaded", "fs", "sync", "stream"]
 [dev-dependencies]
 libc = "0.2"
 smol = "1.2"
+
+[profile.bench]
+lto= "thin"
+opt-level = 3
+codegen-units = 1
+panic = "abort"
 
 #[profile.release]
 #lto= "fat"
