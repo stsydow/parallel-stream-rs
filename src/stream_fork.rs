@@ -4,7 +4,7 @@ use std::pin::Pin;
 use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
-use tokio::runtime::Handle;
+use tokio::runtime::Runtime;
 
 use crate::{ParallelStream, StreamExt, channel, Receiver};
 
@@ -27,7 +27,7 @@ pub fn fork_rr<I, S:Sink<I>>(sinks: Vec<S>) -> ForkRR<S> {
     }
 }
 
-pub fn fork_stream<S>(stream:S, degree:usize, buf_size: usize, exec: &Handle) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream<S>(stream:S, degree:usize, buf_size: usize, exec: &Runtime) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S: Send,
@@ -126,7 +126,7 @@ pub fn fork_sel<I, S:Sink<I>, Si, FSel>(sinks: Si, selector: FSel) -> ForkSel<S,
     }
 }
 
-pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &Handle) -> ParallelStream<Receiver<S::Item>>
+pub fn fork_stream_sel<S, FSel>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &Runtime) -> ParallelStream<Receiver<S::Item>>
 where S:Stream + 'static,
 S::Item: Send,
 S: Send,

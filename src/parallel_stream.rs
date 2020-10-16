@@ -2,7 +2,7 @@ use futures::prelude::*;
 use std::hash::Hash;
 
 use crate::{Receiver, channel::Sender, channel};
-use tokio::runtime::Handle;
+use tokio::runtime::Runtime;
 use crate::{StreamExt, StreamChunkedExt, Tag, JoinTagged, SelectiveContext, SelectiveContextBuffered, InstrumentedMap, InstrumentedMapChunked, InstrumentedFold};
 use crate::stream_join::join_tagged;
 use crate::stream_fork::fork_sel;
@@ -69,7 +69,7 @@ where
         self.add_stage(|s| s.map(|t| t.untag()))
     }
 
-    pub fn shuffle_tagged<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) ->
+    pub fn shuffle_tagged<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Runtime) ->
         ParallelStream<JoinTagged<Receiver<Tag<I>>>>
     where
         I: Send,
@@ -110,11 +110,11 @@ where
     S::Item: Send + 'static,
 {
 
-    pub fn decouple(self, buf_size: usize, exec: &Handle) ->  ParallelStream<Receiver<S::Item>> {
+    pub fn decouple(self, buf_size: usize, exec: &Runtime) ->  ParallelStream<Receiver<S::Item>> {
         self.add_stage(|s| s.decouple(buf_size, exec))
     }
 
-    pub fn join_unordered(self, buf_size: usize, exec: &Handle) ->  Receiver<S::Item> {
+    pub fn join_unordered(self, buf_size: usize, exec: &Runtime) ->  Receiver<S::Item> {
 
         let (join_tx, join_rx) = channel::<S::Item>(buf_size);
         for input in self.streams {
@@ -124,7 +124,7 @@ where
         join_rx
     }
 
-    pub fn shuffle_unordered<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) ->
+    pub fn shuffle_unordered<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Runtime) ->
         ParallelStream<Receiver<S::Item>>
     where
         S: Send + 'static,
@@ -218,7 +218,7 @@ impl<R: Future> ParallelStream<R>
         self.add_stage(|s| s.flatten_stream())
     }
 
-    pub fn merge<Fut, T, F>(self, init: T, f:F, exec: &Handle) ->
+    pub fn merge<Fut, T, F>(self, init: T, f:F, exec: &Runtime) ->
         futures::stream::Fold<Receiver<R::Output>, Fut, T, F>
         where F: FnMut(T, R::Output) -> Fut,
               Fut: Future<Output = T>,
@@ -290,7 +290,7 @@ impl<S: Stream, C> ParallelStream<S>
     }
     */
 
-    pub fn shuffle_unordered_chunked<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Handle) ->
+    pub fn shuffle_unordered_chunked<FSel>(self, selector: FSel, degree: usize, buf_size: usize, exec: &Runtime) ->
         ParallelStream<Receiver<Vec<C::Item>>>
     where
         C::Item: Send + 'static,

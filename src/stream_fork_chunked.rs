@@ -5,7 +5,7 @@ use pin_project::pin_project;
 use futures::prelude::*;
 use tokio;
 use crate::{channel, Receiver};
-use tokio::runtime::Handle;
+use tokio::runtime::Runtime;
 
 use crate::{ParallelStream, StreamExt};
 use std::iter::FromIterator;
@@ -37,7 +37,7 @@ where
     }
 }
 
-pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &Handle) -> ParallelStream<Receiver<Vec<C::Item>>>
+pub fn fork_stream_sel_chunked<S, FSel, C>(stream:S, selector: FSel, degree:usize, buf_size: usize, exec: &Runtime) -> ParallelStream<Receiver<Vec<C::Item>>>
 where
     C: IntoIterator,
     S: Stream<Item=C> + Send + 'static,
