@@ -4,22 +4,23 @@ version = "0.3.1"
 authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
 edition = "2018"
 
-
 [dependencies]
-#argparse = "0.2"
 futures = "0.3"
 pin-project = "1"
 
 [dependencies.tokio]
 version = "0.3"
-#default-features = false
-#default features = ["codec", "fs", "io", "reactor", "rt-full", "sync", "tcp", "timer", "udp", "uds"]
 features = ["io-std", "rt-multi-thread", "fs", "sync", "stream"]
 
 [dev-dependencies]
 libc = "0.2"
 bytes = "0.5"
 smol = "1.2"
+flume = "0.9"
+
+[dev-dependencies.tokio-util]
+version = "0.4"
+features = ["codec"]
 
 [profile.bench]
 lto= "thin"

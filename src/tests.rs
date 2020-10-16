@@ -210,11 +210,79 @@ fn channel_buf100(b: &mut Bencher) {
         runtime.block_on(recv_task);
     });
 }
+
+#[bench]
+fn channel_buf1_flume(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let (send_task, recv_task) = {
+        use futures::SinkExt;
+        let (tx, rx) = flume::bounded::<Message>(1);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send_async(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+        /*
+        let send_task = dummy_stream()
+            .map(|i| Ok(i))
+            .forward(tx.into_sink().sink_map_err(|e| {
+                panic!("send error:{:#?}", e)
+            }));
+        */
+
+        let recv_task = rx
+            .into_stream()
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
+#[bench]
+fn channel_buf100_flume(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let (send_task, recv_task) = {
+        use futures::SinkExt;
+        let (tx, rx) = flume::bounded::<Message>(100);
+
+        let send_task = dummy_stream()
+            .fold(tx, |mut tx, item| async move {
+                let r = tx.send_async(item).await;
+                r.expect("Receiver closed");
+                tx
+            });
+        /*
+        let send_task = dummy_stream()
+            .map(|i| Ok(i))
+            .forward(tx.into_sink().sink_map_err(|e| {
+                panic!("send error:{:#?}", e)
+            }));
+        */
+
+        let recv_task = rx
+            .into_stream()
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        (send_task, recv_task)
+        };
+        runtime.spawn(send_task);
+        runtime.block_on(recv_task);
+    });
+}
+
 #[bench]
 fn channel_buf1_futures(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-
         let (send_task, recv_task) = {
         use futures::SinkExt;
         let (tx, rx) = futures::channel::mpsc::channel::<Message>(1);
@@ -223,14 +291,7 @@ fn channel_buf1_futures(b: &mut Bencher) {
             .forward(tx.sink_map_err(|e| {
                 panic!("send error:{:#?}", e)
             }));
-        /*
-        let send_task = dummy_stream()
-            .fold(tx, |tx, item| async move {
-                let r = tx.send(item).await;
-                r.expect("Receiver closed");
-                tx
-            });
-        */
+
         let recv_task = rx
             .for_each(|item| async move {
                 test_msg(item);
@@ -246,7 +307,6 @@ fn channel_buf1_futures(b: &mut Bencher) {
 fn channel_buf100_futures(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-
         let (send_task, recv_task) = {
         use futures::SinkExt;
         let (tx, rx) = futures::channel::mpsc::channel::<Message>(100);
@@ -877,6 +937,25 @@ fn async_stream_latency(_b: &mut Bencher) {
 
         runtime.block_on(task);
     }
+}
+
+#[bench]
+fn async_read_codec(b: &mut Bencher) {
+    use tokio_util::codec::{BytesCodec, FramedRead, /*FramedWrite*/};
+    use tokio::fs::{File};
+    let runtime = Runtime::new().expect("can not start runtime");
+
+    b.iter(|| {
+        let file_future = File::open("10Mdata");
+        let file: tokio::fs::File = runtime
+                .block_on(file_future)
+                .expect("Can't open input file.");
+        //    Box::pin(byte_stream)
+        let input_stream = FramedRead::new(file , BytesCodec::new());
+        let task = input_stream.for_each(|_b| async {()});
+        runtime.block_on(task);
+    });
+
 }
 
 #[bench]
