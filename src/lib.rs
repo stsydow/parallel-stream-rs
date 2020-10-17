@@ -14,6 +14,8 @@ extern crate test;
 mod channel;
 pub use crate::channel::{channel, Receiver};
 
+mod forward;
+
 mod stream_fork;
 pub use crate::stream_fork::{ForkRR, fork_rr, ForkSel, fork_sel};
 mod stream_fork_chunked;

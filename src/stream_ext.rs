@@ -78,28 +78,21 @@ pub trait StreamExt: Stream {
             Self::Item: Send,
             Self: Sized + Send + 'static,
     {
+        use futures::TryFutureExt;
 
-        let task = self
-            .map(|i| Ok(i))
-            .forward(sink.sink_map_err(|e| {
+        let task = crate::forward::Forward::new(self, sink)
+        //let task = self.forward(sink)
+            .map_err(|e| {
                 panic!("send error:{:#?}", e)
-            }));
-        //let task = sink.send_all(self.map(|i| Ok(i)));
-        exec.spawn(Box::pin(task))
+            });
 
-        /*
-        exec.spawn( async move {
-            let mut self_pin = Box::pin(self);
-            let mut sink_pin = Box::pin(sink);
-            while let Some(item) = self_pin.next().await {
-                let result = sink_pin.send(item).await;
-                if result.is_err() {
-                    return result;
-                }
-            }
-            Ok(())
-        })
-        */
+        exec.spawn(task)
+    }
+
+    fn forward<SOut:Sink<Self::Item>>(self, sink:SOut) -> crate::forward::Forward<Self, SOut, Self::Item>
+        where Self: Sized,
+    {
+        crate::forward::Forward::new(self, sink)
     }
 
     fn decouple(self, buf_size: usize, exec: &Runtime) -> Receiver<Self::Item>
