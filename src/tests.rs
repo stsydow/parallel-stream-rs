@@ -823,7 +823,6 @@ fn async_read_codec(b: &mut Bencher) {
                 .block_on(file_future)
                 .expect("Can't open input file.");
         let input_stream = FramedRead::with_capacity(file , BytesCodec::new(), BUFFER_SIZE);
-        //let task = input_stream.take(BLOCK_COUNT).fold((), |(), ref _buffer | async {()});
         let task = input_stream.take(BLOCK_COUNT).for_each(|_i| async {()});
         runtime.block_on(task);
     });
@@ -871,6 +870,35 @@ fn async_read(b: &mut Bencher) {
 }
 
 #[bench]
+fn async_read_std_file(b: &mut Bencher) {
+    use std::fs::File;
+    use std::io::Read;
+    let runtime = Runtime::new().expect("can not start runtime");
+    
+    b.iter(|| {
+        let mut file = Box::pin(File::open("/dev/zero").expect("Unable to open file"));
+
+        let input_stream = stream::unfold(file.as_mut(), |mut file| async move {
+            let mut buffer = [0u8; BUFFER_SIZE];
+
+            let file = tokio::task::block_in_place(move || {
+                file.read_exact(&mut buffer)
+                    .expect("err reading file");
+                file
+            });
+
+            let next_state = file;
+            let yielded = buffer;
+            Some( (yielded, next_state) )
+        });
+
+        let task = input_stream.take(BLOCK_COUNT).for_each(|_i| async {()});
+        runtime.block_on(task);
+    });
+
+}
+
+#[bench]
 fn sync_read(b: &mut Bencher) {
     use std::fs::File;
     use std::io::Read;
@@ -887,6 +915,7 @@ fn sync_read(b: &mut Bencher) {
     });
 
 }
+
 #[bench]
 fn measure_time(b: &mut Bencher) {
     b.iter( || {
