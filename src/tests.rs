@@ -1,10 +1,8 @@
 use std::time::Instant;
-use bytes::Bytes;
 
 use tokio::prelude::*;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc::{Receiver, channel};
-use tokio::executor::DefaultExecutor;
+use tokio::sync::mpsc::{/*Receiver,*/ channel};
 
 use test::Bencher;
 use test::black_box;
@@ -94,6 +92,48 @@ fn async_stream(b: &mut Bencher) {
         let task = dummy_stream()
             .for_each(|item| {
                 test_msg(item);
+                Ok(())
+            });
+        runtime.block_on(task).expect("error in main task");
+    });
+}
+
+#[bench]
+fn selective_context(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .selective_context(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|item| {
+                test_msg(item);
+                Ok(())
+            });
+        runtime.block_on(task).expect("error in main task");
+    });
+}
+
+#[bench]
+fn selective_context_buf(b: &mut Bencher) {
+    use crate::stream_ext::StreamChunkedExt;
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .chunks(100)
+            .selective_context_buffered(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|chunk| {
+                for item in chunk {
+                    test_msg(item);
+                }
                 Ok(())
             });
         runtime.block_on(task).expect("error in main task");
@@ -445,6 +485,72 @@ fn async_stream_latency(_b: &mut Bencher) {
 
         runtime.block_on(task).expect("error in main task");
     }
+}
+
+const BUFFER_SIZE:usize = 4096; 
+#[bench]
+fn async_read_codec(b: &mut Bencher) {
+    use tokio::codec::{BytesCodec, FramedRead, /*FramedWrite*/};
+    use tokio::fs::File;
+    let mut runtime = Runtime::new().expect("can not start runtime");
+
+    b.iter(|| {
+        let file_future = File::open("/dev/zero");
+        let file: tokio::fs::File = runtime
+                .block_on(file_future)
+                .expect("Can't open input file.");
+        let input_stream = FramedRead::new(file , BytesCodec::new());
+        let task = input_stream.take(BLOCK_COUNT as u64)
+            .for_each(|_| {
+                Ok(())
+            });
+        runtime.block_on(task).expect("task error");
+    });
+
+}
+
+#[bench]
+fn async_read(b: &mut Bencher) {
+    use tokio::fs::File;
+    use tokio::io::AsyncRead;
+    let mut runtime = Runtime::new().expect("can not start runtime");
+
+    b.iter(|| {
+        let task = File::open("/dev/zero")
+            .and_then(move |mut file| 
+            {
+                let mut buffer = [0u8; BUFFER_SIZE];
+                stream::poll_fn( move || {
+                    let r = futures::try_ready!(file.poll_read(&mut buffer));
+                    Ok(Async::Ready(Some(r)))
+                })
+                .take(BLOCK_COUNT as u64)
+                .for_each(|_| {
+                        Ok(())
+                })
+            });
+       
+        runtime.block_on(task).expect("task error");
+    });
+
+}
+
+#[bench]
+fn sync_read(b: &mut Bencher) {
+    use std::fs::File;
+    use std::io::Read;
+    
+    b.iter(|| {
+        let mut file = File::open("/dev/zero").expect("Unable to open file");
+
+        let mut buffer = [0u8; BUFFER_SIZE];
+
+        for _i in 0 .. BLOCK_COUNT {
+            file.read_exact(&mut buffer)
+                .expect("err reading file");
+        }
+    });
+
 }
 
 #[bench]
