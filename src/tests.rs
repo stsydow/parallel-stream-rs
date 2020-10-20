@@ -19,6 +19,8 @@ const BLOCK_COUNT:usize = 1_000;
 const THREADS:usize = 8;
 
 const CHANNEL_BUFFER:usize = 100;
+const DEV_ZERO: &'static str = "/dev/zero"; 
+
 /*
 const BLOCK_SIZE:usize = 1<<12; //4k
 static PAYLOAD:[u8; BLOCK_SIZE] = [0u8; BLOCK_SIZE];
@@ -55,17 +57,13 @@ fn sync_fn(b: &mut Bencher) {
 }
 
 fn dummy_iter() -> impl Iterator<Item=Message> {
-    let mut count = 0;
-    let byte_stream = std::iter::from_fn(move || {
-        if count < BLOCK_COUNT {
-            let buffer = new_message(count);
-            count += 1;
-            Some(buffer)
-        } else {
-            None
-        }
-    });
-    byte_stream
+        (0 .. BLOCK_COUNT).map(|i| new_message(i))
+}
+
+fn dummy_stream() -> impl Stream<Item=Message> {
+    stream::iter(
+        dummy_iter()
+    )
 }
 
 #[bench]
@@ -78,17 +76,6 @@ fn iter_stream(b: &mut Bencher) {
     });
 }
 
-//#[inline(never)]
-fn dummy_stream() -> impl Stream<Item=Message> {
-    stream::unfold(0, |count| async move {
-        if count < BLOCK_COUNT {
-            let buffer = new_message(count);
-            Some((buffer, count + 1))
-        } else {
-            None
-        }
-    })
-}
 
 #[bench]
 fn async_stream(b: &mut Bencher) {
@@ -139,6 +126,46 @@ fn async_stream_map10(b: &mut Bencher) {
         .for_each(|item| async move {
             test_msg(item);
         });
+        runtime.block_on(task);
+    });
+}
+
+#[bench]
+fn selective_context(b: &mut Bencher) {
+    let runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .selective_context(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        runtime.block_on(task);
+    });
+}
+
+#[bench]
+fn selective_context_buf(b: &mut Bencher) {
+    use crate::stream_ext::StreamChunkedExt;
+    let runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .chunks(100)
+            .selective_context_buffered(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|chunk| async move {
+                for item in chunk {
+                    test_msg(item);
+                }
+            });
         runtime.block_on(task);
     });
 }
@@ -814,12 +841,12 @@ const BUFFER_SIZE:usize = 4096;
 #[bench]
 fn async_read_codec(b: &mut Bencher) {
     use tokio_util::codec::{BytesCodec, FramedRead, /*FramedWrite*/};
-    use tokio::fs::{File};
+    use tokio::fs::File;
     let runtime = Runtime::new().expect("can not start runtime");
 
     b.iter(|| {
         let file_future = File::open("/dev/zero");
-        let file: tokio::fs::File = runtime
+        let file: File = runtime
                 .block_on(file_future)
                 .expect("Can't open input file.");
         let input_stream = FramedRead::with_capacity(file , BytesCodec::new(), BUFFER_SIZE);
@@ -830,9 +857,9 @@ fn async_read_codec(b: &mut Bencher) {
 }
 
 #[bench]
-fn async_read(b: &mut Bencher) {
-    use tokio::fs::{File};
-    use tokio::io::{AsyncReadExt};
+fn async_read_fs(b: &mut Bencher) {
+    use async_fs::File;
+    use futures::AsyncReadExt;
     let runtime = Runtime::new().expect("can not start runtime");
 
     b.iter(|| {
@@ -870,32 +897,60 @@ fn async_read(b: &mut Bencher) {
 }
 
 #[bench]
+fn async_read(b: &mut Bencher) {
+    use tokio::fs::{File};
+    use tokio::io::{AsyncReadExt};
+    let runtime = Runtime::new().expect("can not start runtime");
+
+    b.iter(|| {
+        let task = || async { 
+                let mut file = File::open(DEV_ZERO)
+                    .await
+                    .unwrap();
+                let mut buffer = [0u8; BUFFER_SIZE];
+
+                for _i in 0 .. BLOCK_COUNT {
+                    let count = file.read(&mut buffer)
+                        .await
+                        .unwrap();
+                    if count == 0 { break; }
+                }
+            };
+
+       
+        runtime.block_on(task());
+    });
+}
+
+#[bench]
 fn async_read_std_file(b: &mut Bencher) {
     use std::fs::File;
     use std::io::Read;
     let runtime = Runtime::new().expect("can not start runtime");
     
     b.iter(|| {
-        let mut file = Box::pin(File::open("/dev/zero").expect("Unable to open file"));
+        let task = || async { 
+                let mut file = 
+                    tokio::task::block_in_place(||
+                    Box::pin(File::open(DEV_ZERO).unwrap())
+                    )
+                ;
+                
 
-        let input_stream = stream::unfold(file.as_mut(), |mut file| async move {
-            let mut buffer = [0u8; BUFFER_SIZE];
+                for _i in 0 .. BLOCK_COUNT {
+                    let mut buffer = [0u8; BUFFER_SIZE];
+                    let mut file_ref = file.as_mut();
 
-            let file = tokio::task::block_in_place(move || {
-                file.read_exact(&mut buffer)
-                    .expect("err reading file");
-                file
-            });
+                    tokio::task::block_in_place(move || {
+                        file_ref.read_exact(&mut buffer).unwrap();
+                    });
+                    //yield buffer;
+                }
 
-            let next_state = file;
-            let yielded = buffer;
-            Some( (yielded, next_state) )
-        });
-
-        let task = input_stream.take(BLOCK_COUNT).for_each(|_i| async {()});
-        runtime.block_on(task);
+            };
+       
+        runtime.block_on(task());
     });
-
 }
 
 #[bench]
@@ -904,7 +959,7 @@ fn sync_read(b: &mut Bencher) {
     use std::io::Read;
     
     b.iter(|| {
-        let mut file = File::open("/dev/zero").expect("Unable to open file");
+        let mut file = File::open(DEV_ZERO).expect("Unable to open file");
 
         let mut buffer = [0u8; BUFFER_SIZE];
 
