@@ -16,6 +16,7 @@ features = ["io-std", "io-util", "rt-multi-thread", "fs", "sync", "stream"]
 libc = "0.2"
 bytes = "0.5"
 smol = "1.2"
+async-fs = "1.5"
 #flume = "0.9"
 [dev-dependencies.flume]
 git = "https://github.com/zesterer/flume.git" 
