@@ -39,8 +39,8 @@ pub use crate::parallel_stream::ParallelStream;
 mod tagged_stream;
 pub use crate::tagged_stream::{TaggedStream, Tag, tag};
 
-#[cfg(test)]
-mod tests;
+//#[cfg(test)]
+//mod tests;
 
 use tokio::prelude::*;
 use std::time::{ Instant };
