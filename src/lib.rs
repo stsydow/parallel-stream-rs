@@ -1,5 +1,6 @@
 //#![feature(test)]
-extern crate test;
+//extern crate test;
+
 //#![feature(impl_trait_in_bindings)]
 //extern crate num_derive;
 
