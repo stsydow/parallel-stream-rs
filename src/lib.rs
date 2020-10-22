@@ -1,6 +1,3 @@
-//#![feature(test)]
-//extern crate test;
-
 //#![feature(impl_trait_in_bindings)]
 //extern crate num_derive;
 
@@ -41,7 +38,6 @@ mod tagged_stream;
 pub use crate::tagged_stream::{TaggedStream, Tag, tag};
 
 //#[cfg(test)]
-//mod tests;
 
 use tokio::prelude::*;
 use std::time::{ Instant };

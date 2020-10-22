@@ -21,6 +21,12 @@ features = ["codec", "fs", "io", "rt-full", "sync"]
 
 [dev-dependencies]
 libc = "0.2"
+bencher = "0.1"
+
+[[bench]]
+name = "bench"
+path = "src/bench.rs"
+harness = false
 
 #[profile.release]
 #lto= "fat"
