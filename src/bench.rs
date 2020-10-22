@@ -115,7 +115,50 @@ fn async_stream_map10(b: &mut Bencher) {
         runtime.block_on(task).expect("error in main task");
     });
 }
-benchmark_group!(async_fn, sync_fn, iter_stream, async_stream, async_stream_map10);
+
+//#[bench]
+fn selective_context(b: &mut Bencher) {
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .selective_context(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|item| {
+                test_msg(item);
+                Ok(())
+            });
+        runtime.block_on(task).expect("error in main task");
+    });
+}
+
+//#[bench]
+fn selective_context_buf(b: &mut Bencher) {
+    use parallel_stream::StreamChunkedExt;
+    let mut runtime = Runtime::new().expect("can not start runtime");
+    b.iter(|| {
+        let task = dummy_stream()
+            .chunks(100)
+            .selective_context_buffered(
+                |_| {0},
+                |i| {*i},
+                |cx, i| { *cx += i; i },
+                "sel_test".to_owned()
+                )
+            .for_each(|chunk| {
+                for item in chunk {
+                    test_msg(item);
+                }
+                Ok(())
+            });
+        runtime.block_on(task).expect("error in main task");
+    });
+}
+
+benchmark_group!(async_fn, sync_fn, iter_stream, async_stream, async_stream_map10, selective_context_buf, selective_context);
 
 //#[bench]
 fn channel_buf1(b: &mut Bencher) {
