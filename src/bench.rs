@@ -4,7 +4,7 @@ use tokio::prelude::*;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc::channel;
 
-use bencher::{benchmark_group, benchmark_main, Bencher, black_box};
+use bencher::{benchmark_group, benchmark_main, black_box, Bencher};
 
 use parallel_stream::{fork_rr, StreamExt};
 
@@ -20,6 +20,14 @@ fn new_message() -> Message {
     Bytes::from_static(&PAYLOAD)
 }
 */
+
+fn rt() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new()
+        .core_threads(THREADS)
+        .build()
+        .unwrap()
+}
+
 type Message = usize;
 fn new_message(val: usize) -> Message {
     val
@@ -83,7 +91,7 @@ fn dummy_stream() -> impl Stream<Item = Message, Error = ()> {
 
 //#[bench]
 fn async_stream(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let task = dummy_stream().for_each(|item| {
             test_msg(item);
@@ -95,7 +103,7 @@ fn async_stream(b: &mut Bencher) {
 
 //#[bench]
 fn async_stream_map10(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let task = dummy_stream()
             .map(|i| i)
@@ -118,15 +126,18 @@ fn async_stream_map10(b: &mut Bencher) {
 
 //#[bench]
 fn selective_context(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let task = dummy_stream()
             .selective_context(
-                |_| {0},
-                |i| {*i},
-                |cx, i| { *cx += i; i },
-                "sel_test".to_owned()
-                )
+                |_| 0,
+                |i| *i,
+                |cx, i| {
+                    *cx += i;
+                    i
+                },
+                "sel_test".to_owned(),
+            )
             .for_each(|item| {
                 test_msg(item);
                 Ok(())
@@ -138,16 +149,19 @@ fn selective_context(b: &mut Bencher) {
 //#[bench]
 fn selective_context_buf(b: &mut Bencher) {
     use parallel_stream::StreamChunkedExt;
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let task = dummy_stream()
             .chunks(100)
             .selective_context_buffered(
-                |_| {0},
-                |i| {*i},
-                |cx, i| { *cx += i; i },
-                "sel_test".to_owned()
-                )
+                |_| 0,
+                |i| *i,
+                |cx, i| {
+                    *cx += i;
+                    i
+                },
+                "sel_test".to_owned(),
+            )
             .for_each(|chunk| {
                 for item in chunk {
                     test_msg(item);
@@ -158,11 +172,19 @@ fn selective_context_buf(b: &mut Bencher) {
     });
 }
 
-benchmark_group!(async_fn, sync_fn, iter_stream, async_stream, async_stream_map10, selective_context_buf, selective_context);
+benchmark_group!(
+    async_fn,
+    sync_fn,
+    iter_stream,
+    async_stream,
+    async_stream_map10,
+    selective_context_buf,
+    selective_context
+);
 
 //#[bench]
 fn channel_buf1(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let (tx, rx) = channel::<Message>(1);
 
@@ -180,7 +202,7 @@ fn channel_buf1(b: &mut Bencher) {
 
 //#[bench]
 fn channel_buf_big(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let (tx, rx) = channel::<Message>(BLOCK_COUNT);
 
@@ -199,7 +221,7 @@ fn channel_buf_big(b: &mut Bencher) {
 
 //#[bench]
 fn channel_buf_big_chunk10(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     b.iter(|| {
         let (tx, rx) = channel::<Vec<Message>>(BLOCK_COUNT / 10);
 
@@ -228,7 +250,7 @@ benchmark_group!(
 
 //#[bench]
 fn fork_join(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     let mut exec = runtime.executor();
     b.iter(|| {
         let (fork, join) = {
@@ -257,7 +279,7 @@ fn fork_join(b: &mut Bencher) {
 
 //#[bench]
 fn fork_join_unorderd(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     let mut exec = runtime.executor();
     b.iter(|| {
         let pipeline = dummy_stream()
@@ -272,7 +294,7 @@ fn fork_join_unorderd(b: &mut Bencher) {
 
 //#[bench]
 fn shuffle(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     let mut exec = runtime.executor();
     b.iter(|| {
         let pipeline = dummy_stream()
@@ -359,7 +381,7 @@ fn file_io(b: &mut Bencher) {
 
 //#[bench]
 fn wait_task(b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
 
     b.iter(|| {
         let task = future::lazy(|| future::ok::<(), std::io::Error>(()));
@@ -371,7 +393,7 @@ fn wait_task(b: &mut Bencher) {
 //#[bench]
 fn spawn_1(b: &mut Bencher) {
     b.iter(|| {
-        let runtime = Runtime::new().expect("can not start runtime");
+        let runtime = rt();
         let task = future::lazy(|| future::ok::<(), ()>(()));
         runtime.block_on_all(task).expect("error in main task");
     });
@@ -380,7 +402,7 @@ fn spawn_1(b: &mut Bencher) {
 //#[bench]
 fn spawn(b: &mut Bencher) {
     b.iter(|| {
-        let mut runtime = Runtime::new().expect("can not start runtime");
+        let mut runtime = rt();
 
         for _i in 0..BLOCK_COUNT - 1 {
             let task = future::lazy(|| future::ok::<(), ()>(()));
@@ -409,7 +431,7 @@ fn time_stream() -> impl Stream<Item = Instant, Error = ()> {
 
 //#[bench]
 fn channel_buf1_latency(_b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     for _i in 0..5 {
         let (tx, rx) = channel::<Instant>(1);
 
@@ -432,7 +454,7 @@ fn channel_buf1_latency(_b: &mut Bencher) {
 
 //#[bench]
 fn channel_buf_big_latency(_b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     for _i in 0..5 {
         let (tx, rx) = channel::<Instant>(BLOCK_COUNT);
 
@@ -455,7 +477,7 @@ fn channel_buf_big_latency(_b: &mut Bencher) {
 
 //#[bench]
 fn async_stream_latency(_b: &mut Bencher) {
-    let mut runtime = Runtime::new().expect("can not start runtime");
+    let mut runtime = rt();
     for _i in 0..5 {
         let task = time_stream()
             .fold((0u128, 0usize), |(sum, len), t| {
@@ -489,4 +511,65 @@ fn measure_time(b: &mut Bencher) {
 }
 benchmark_group!(time, measure_time);
 
-benchmark_main!(mpsc_channel, async_fn, time, /*latency,*/ parallel, task_sched);
+use std::fs::File as StdFile;
+use std::io::Read as StdRead;
+use tokio::codec::{BytesCodec, FramedRead /*FramedWrite*/};
+use tokio::fs::File;
+
+const BUFFER_SIZE: usize = 4096;
+const DEV_ZERO: &'static str = "/dev/zero";
+
+fn async_read_codec(b: &mut Bencher) {
+    let mut runtime = rt();
+
+    b.iter(|| {
+        let task = File::open(DEV_ZERO).and_then(|file| {
+            let input_stream = FramedRead::new(file, BytesCodec::new());
+            input_stream.take(BLOCK_COUNT as u64).for_each(|_| Ok(()))
+        });
+        runtime.block_on(task).expect("task error");
+    });
+}
+
+fn async_read(b: &mut Bencher) {
+    let mut runtime = rt();
+
+    b.iter(|| {
+        let task = File::open(DEV_ZERO).and_then(move |mut file| {
+            let mut buffer = [0u8; BUFFER_SIZE];
+            stream::poll_fn(move || {
+                let r = match file.poll_read(&mut buffer)? {
+                    Async::Ready(count) => Async::Ready(Some(count)),
+                    Async::NotReady => Async::NotReady,
+                };
+                Ok(r)
+            })
+            .take(BLOCK_COUNT as u64)
+            .for_each(|_| Ok(()))
+        });
+
+        runtime.block_on(task).expect("task error");
+    });
+}
+
+fn sync_read(b: &mut Bencher) {
+    b.iter(|| {
+        let mut file = StdFile::open(DEV_ZERO).unwrap();
+        let mut buffer = [0u8; BUFFER_SIZE];
+
+        for _i in 0..BLOCK_COUNT {
+            file.read_exact(&mut buffer).unwrap();
+        }
+    });
+}
+
+benchmark_group!(file, async_read, async_read_codec, sync_read);
+
+benchmark_main!(
+    mpsc_channel,
+    async_fn,
+    time,
+    /*latency,*/ parallel,
+    task_sched,
+    file
+);
