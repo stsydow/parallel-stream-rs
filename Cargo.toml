@@ -12,18 +12,22 @@ pin-project = "1"
 version = "0.3"
 features = ["io-std", "io-util", "rt-multi-thread", "fs", "sync", "stream"]
 
-[dev-dependencies]
-libc = "0.2"
-bytes = "0.5"
-smol = "1.2"
-async-fs = "1.5"
-#flume = "0.9"
-[dev-dependencies.flume]
+[dependencies.flume]
 git = "https://github.com/zesterer/flume.git" 
 rev = "0baef3d"
 
+[dev-dependencies]
+libc = "0.2"
+bytes = "0.6"
+smol = "1.2"
+async-fs = "1.5"
+
+[dev-dependencies.executors]
+version = "0.8"
+features = ["thread-pinning"]
+
 [dev-dependencies.tokio-util]
-version = "0.4"
+version = "0.5"
 features = ["codec"]
 
 [profile.bench]

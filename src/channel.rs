@@ -40,6 +40,16 @@
 pub use futures::channel::mpsc::{channel, Receiver, Sender};
 
 /*
+pub use flume::async::RecvStream as Receiver;
+pub use flume::async::SendSink as Sender;
+
+pub fn channel<T:Unpin>(cap: usize) -> (flume::async::SendSink<T>,flume::async::RecvStream<T>) {
+    let (tx, rx) = flume::bounded(cap);
+    (tx.into_sink(), rx.into_stream())
+}
+*/
+
+/*
 
 use futures::task::{Poll, Context};
 use futures::sink::Sink;

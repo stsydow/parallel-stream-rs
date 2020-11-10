@@ -76,7 +76,6 @@ fn iter_stream(b: &mut Bencher) {
     });
 }
 
-
 #[bench]
 fn async_stream(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
@@ -86,6 +85,30 @@ fn async_stream(b: &mut Bencher) {
                 test_msg(item);
             });
         runtime.block_on(task);
+    });
+}
+
+#[bench]
+fn async_stream_smol(b: &mut Bencher) {
+    b.iter(|| {
+        let task = dummy_stream()
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        smol::block_on(task);
+    });
+}
+
+#[bench]
+fn async_stream_exec_fut(b: &mut Bencher) {
+    use futures::executor::block_on;
+
+    b.iter(|| {
+        let task = dummy_stream()
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        block_on(task);
     });
 }
 
@@ -174,17 +197,19 @@ fn selective_context_buf(b: &mut Bencher) {
 fn channel_setup(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
-        let (tx, rx) = channel::<Message>(1);
+        let (tx, mut rx) = channel::<Message>(1);
 
         futures::stream::once(async {new_message(1)})
         .forward_and_spawn(tx, &runtime);
-        let recv_task = rx
-            .for_each(|item| async move {
+
+        let recv_task = || async move { 
+            if let Some(item ) = rx.next().await {
                 test_msg(item);
-            });
+            }
+        };
 
 
-        runtime.block_on(recv_task);
+        runtime.block_on(recv_task());
     });
 }
 
@@ -206,6 +231,47 @@ fn channel_buf1(b: &mut Bencher) {
 }
 
 #[bench]
+fn smol_channel_buf1(b: &mut Bencher) {
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(1);
+
+        smol::spawn(MyStreamExt::forward(dummy_stream(), tx)).detach();
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        smol::block_on(recv_task);
+    });
+}
+
+#[bench]
+fn execrs_channel_buf1(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(1);
+
+        pool.spawn(MyStreamExt::forward(dummy_stream(), tx)).detach();
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+
+        let recv = pool.spawn(recv_task);
+
+        block_on(recv);
+    });
+    pool.shutdown().expect("shutdown");
+}
+
+#[bench]
 fn channel_buf_big(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
@@ -223,6 +289,47 @@ fn channel_buf_big(b: &mut Bencher) {
 }
 
 #[bench]
+fn smol_channel_buf_big(b: &mut Bencher) {
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(BLOCK_COUNT);
+
+        smol::spawn(MyStreamExt::forward(dummy_stream(), tx)).detach();
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+        smol::block_on(recv_task);
+    });
+}
+
+#[bench]
+fn execrs_channel_buf_big(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+        let (tx, rx) = channel::<Message>(BLOCK_COUNT);
+
+        pool.spawn(MyStreamExt::forward(dummy_stream(), tx)).detach();
+
+        let recv_task = rx
+            .for_each(|item| async move {
+                test_msg(item);
+            });
+
+        let recv = pool.spawn(recv_task);
+
+        block_on(recv);
+    });
+    pool.shutdown().expect("shutdown");
+}
+
+#[bench]
 fn channel_buf1_flume_fold(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
@@ -236,12 +343,12 @@ fn channel_buf1_flume_fold(b: &mut Bencher) {
                 tx
             });
 
-        let recv_task = rx
-            .into_stream()
-            .for_each(|item| async move {
+        let recv_task = || async move { 
+            while let Ok(item) = rx.recv_async().await {
                 test_msg(item);
-            });
-        (send_task, recv_task)
+            }
+        };
+        (send_task, recv_task())
         };
         runtime.spawn(send_task);
         runtime.block_on(recv_task);
@@ -270,6 +377,64 @@ fn channel_buf1_flume(b: &mut Bencher) {
         runtime.spawn(send_task);
         runtime.block_on(recv_task);
     });
+}
+
+#[bench]
+fn smol_channel_buf1_flume(b: &mut Bencher) {
+    b.iter(|| {
+        let (send_task, recv_task) = {
+            let (tx, rx) = flume::bounded::<Message>(1);
+
+            let send_task = MyStreamExt::forward(dummy_stream(), tx.into_sink())
+                .map_err(|e| {
+                    panic!("send error:{:#?}", e)
+                });
+
+            let recv_task = rx
+                .into_stream()
+                .for_each(|item| async move {
+                    test_msg(item);
+                });
+            (send_task, recv_task)
+        };
+
+        smol::spawn(send_task).detach();
+        smol::block_on(recv_task);
+    });
+}
+
+#[bench]
+fn execrs_channel_buf1_flume(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+        let (send_task, recv_task) = {
+            let (tx, rx) = flume::bounded::<Message>(1);
+
+            let send_task = MyStreamExt::forward(dummy_stream(), tx.into_sink())
+                .map_err(|e| {
+                    panic!("send error:{:#?}", e)
+                });
+
+            let recv_task = rx
+                .into_stream()
+                .for_each(|item| async move {
+                    test_msg(item);
+                });
+            (send_task, recv_task)
+        };
+
+        pool.spawn(send_task).detach();
+        let recv = pool.spawn(recv_task);
+
+        block_on(recv);
+    });
+    pool.shutdown().expect("shutdown");
 }
 
 #[bench]
@@ -302,6 +467,64 @@ fn channel_buf_big_flume(b: &mut Bencher) {
         runtime.spawn(send_task);
         runtime.block_on(recv_task);
     });
+}
+
+#[bench]
+fn smol_channel_buf_big_flume(b: &mut Bencher) {
+    b.iter(|| {
+        let (send_task, recv_task) = {
+            let (tx, rx) = flume::bounded::<Message>(BLOCK_COUNT);
+
+            let send_task = MyStreamExt::forward(dummy_stream(), tx.into_sink())
+                .map_err(|e| {
+                    panic!("send error:{:#?}", e)
+                });
+
+            let recv_task = rx
+                .into_stream()
+                .for_each(|item| async move {
+                    test_msg(item);
+                });
+            (send_task, recv_task)
+        };
+
+        smol::spawn(send_task).detach();
+        smol::block_on(recv_task);
+    });
+}
+
+#[bench]
+fn execrs_channel_buf_big_flume(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+        let (send_task, recv_task) = {
+            let (tx, rx) = flume::bounded::<Message>(BLOCK_COUNT);
+
+            let send_task = MyStreamExt::forward(dummy_stream(), tx.into_sink())
+                .map_err(|e| {
+                    panic!("send error:{:#?}", e)
+                });
+
+            let recv_task = rx
+                .into_stream()
+                .for_each(|item| async move {
+                    test_msg(item);
+                });
+            (send_task, recv_task)
+        };
+
+        pool.spawn(send_task).detach();
+        let recv = pool.spawn(recv_task);
+
+        block_on(recv);
+    });
+    pool.shutdown().expect("shutdown");
 }
 
 #[bench]
@@ -716,7 +939,7 @@ fn wait_task(b: &mut Bencher) {
 }
 
 #[bench]
-fn spawn_1(b: &mut Bencher) {
+fn spawn_tokio_1(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     
     b.iter(|| {
@@ -726,7 +949,7 @@ fn spawn_1(b: &mut Bencher) {
 }
 
 #[bench]
-fn spawn(b: &mut Bencher) {
+fn spawn_tokio(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
 
     b.iter(|| {
@@ -740,6 +963,45 @@ fn spawn(b: &mut Bencher) {
 
         runtime.block_on(future::join_all(tasks));
     });
+}
+
+#[bench]
+fn spawn_smol(b: &mut Bencher) {
+
+    b.iter(|| {
+
+        let mut tasks = Vec::with_capacity(BLOCK_COUNT);
+        for _i in 0 .. BLOCK_COUNT {
+            let task = future::lazy(|_| () );
+
+            tasks.push(smol::spawn(task));
+        }
+
+        smol::block_on(future::join_all(tasks));
+    });
+}
+
+#[bench]
+fn spawn_execrs(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+
+        let mut tasks = Vec::with_capacity(BLOCK_COUNT);
+        for _i in 0 .. BLOCK_COUNT {
+            let task = future::lazy(|_| () );
+
+            tasks.push(pool.spawn(task));
+        }
+
+        block_on(future::join_all(tasks));
+    });
+    pool.shutdown().expect("shutdown");
 }
 
 
@@ -897,6 +1159,52 @@ fn async_read_fs(b: &mut Bencher) {
 }
 
 #[bench]
+fn smol_async_read_fs(b: &mut Bencher) {
+    use async_fs::File;
+    use futures::AsyncReadExt;
+
+    b.iter(|| {
+        let task = File::open("/dev/zero")
+            .then(|r_file| async move {
+                let mut file = r_file.expect("Can't open input file.");
+                let mut buffer = [0u8; BUFFER_SIZE];
+
+                for _i in 0 .. BLOCK_COUNT {
+                    let count = file.read(&mut buffer).await
+                        .expect("Can't read file.");
+                    if count == 0 { break; }
+                }
+            });
+
+        smol::block_on(task);
+    });
+
+}
+
+#[bench]
+fn exec_fut_async_read_fs(b: &mut Bencher) {
+    use futures::executor::block_on;
+    use async_fs::File;
+    use futures::AsyncReadExt;
+
+    b.iter(|| {
+        let task = File::open("/dev/zero")
+            .then(|r_file| async move {
+                let mut file = r_file.expect("Can't open input file.");
+                let mut buffer = [0u8; BUFFER_SIZE];
+
+                for _i in 0 .. BLOCK_COUNT {
+                    let count = file.read(&mut buffer).await
+                        .expect("Can't read file.");
+                    if count == 0 { break; }
+                }
+            });
+        block_on(task);
+    });
+}
+
+
+#[bench]
 fn async_read(b: &mut Bencher) {
     use tokio::fs::{File};
     use tokio::io::{AsyncReadExt};
@@ -921,6 +1229,7 @@ fn async_read(b: &mut Bencher) {
         runtime.block_on(task());
     });
 }
+
 
 #[bench]
 fn async_read_std_file(b: &mut Bencher) {
