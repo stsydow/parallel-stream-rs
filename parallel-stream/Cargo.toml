@@ -1,0 +1,15 @@
+[package]
+name = "parallel-stream"
+version = "0.3.2"
+authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
+edition = "2018"
+
+[dependencies]
+futures = "0.3"
+pin-project = "1"
+
+[dependencies.tokio]
+version = "0.3"
+#features = ["io-std", "io-util", "rt-multi-thread", "fs", "sync", "stream"]
+features = ["rt-multi-thread"]
+

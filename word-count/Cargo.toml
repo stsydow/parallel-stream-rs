@@ -1,0 +1,88 @@
+[package]
+name = "word-count"
+version = "0.3.0"
+authors = [ "Stefan Sydow <stefan.sydow@tu-berlin.de>" ]
+edition = "2018"
+
+[[bin]]
+name = "wc-seq"
+path = "src/word_count_seq.rs"
+
+[[bin]]
+name = "wc-seq-buf"
+path = "src/word_count_seq_buf.rs"
+
+#[[bin]]
+#name = "wc-async"
+#path = "src/word_count_async.rs"
+
+[[bin]]
+name = "wc-async-buf"
+path = "src/word_count_async_buf.rs"
+
+#[[bin]]
+#name = "wc-parallel"
+#path = "src/word_count_para.rs"
+
+#[[bin]]
+#name = "wc-parallel-fine"
+#path = "src/word_count_para_fine.rs"
+
+#[[bin]]
+#name = "wc-parallel-chunked"
+#path = "src/word_count_para_chunked.rs"
+
+#[[bin]]
+#name = "wc-parallel-buf"
+#path = "src/word_count_para_buf.rs"
+
+#[[bin]]
+#name = "wc-parallel-partition"
+#path = "src/word_count_para_partition.rs"
+
+#[[bin]]
+#name = "wc-parallel-partition-chunked"
+#path = "src/word_count_para_partition_chunked.rs"
+
+#[[bin]]
+#name = "wc-parallel-partition-buf"
+#path = "src/word_count_para_partition_buf.rs"
+
+#[[bin]]
+#name = "wc-parallel-partition-shuffle"
+#path = "src/word_count_para_partition_shuffle.rs"
+
+#[[bin]]
+#name = "wc-parallel-partition-shuffle-chunked"
+#path = "src/word_count_para_partition_shuffle_chunked.rs"
+
+[[bin]]
+name = "wc-parallel-new"
+path = "src/word_count_new_parallel.rs"
+
+[[bin]]
+name = "wc-parallel-shuffle-new"
+path = "src/word_count_new_parallel_shuffle.rs"
+
+[[bin]]
+name = "async-read"
+path = "src/async_read.rs"
+
+[dependencies]
+argparse = "0.2"
+log = "0.4"
+simplelog = "0.7"
+#tokio-io = "0.1"
+futures = "0.3"
+bytes = "0.6"
+libc = "0.2"
+#itertools = "0.9"
+parallel-stream = { version = "0.3", path = "../parallel-stream" }
+
+[dependencies.tokio]
+version = "0.3"
+features = ["io-std", "rt", "rt-multi-thread", "fs", "sync", "stream"]
+
+[dependencies.tokio-util]
+version = "0.5"
+features = ["codec"]

@@ -1,0 +1,22 @@
+[package]
+name = "rustwp"
+version = "0.1.0"
+authors = ["Martin Richtarsky <martin@productive-cpp.com>"]
+edition = "2018"
+
+[dependencies]
+crossbeam = "0.7"
+time = "*"
+memmap = "*"
+
+[profile.release]
+lto= "fat"
+opt-level = 3
+#debug = 1
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+debug = 2
+

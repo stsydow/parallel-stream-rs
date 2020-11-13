@@ -1,0 +1,57 @@
+[package]
+name = "benches"
+version = "0.0.0"
+publish = false
+edition = "2018"
+
+[dependencies]
+parallel-stream = { version = "0.3", path = "../parallel-stream" }
+futures = "0.3"
+
+[dependencies.tokio]
+version = "0.3"
+features = ["io-std", "io-util", "rt-multi-thread", "fs", "sync", "stream"]
+
+[dev-dependencies.flume]
+git = "https://github.com/zesterer/flume.git" 
+rev = "0baef3d"
+
+[dev-dependencies]
+libc = "0.2"
+bencher = "0.1"
+bytes = "0.6"
+smol = "1.2"
+async-fs = "1.5"
+
+[dev-dependencies.executors]
+version = "0.8"
+features = ["thread-pinning"]
+
+[dev-dependencies.tokio-util]
+version = "0.5"
+features = ["codec"]
+
+[[bench]]
+name = "bench-main"
+path = "bench.rs"
+harness = false
+
+[[bench]]
+name = "channel"
+path = "channel.rs"
+harness = false
+
+[[bench]]
+name = "fs"
+path = "fs.rs"
+harness = false
+
+[[bench]]
+name = "parallel"
+path = "parallel.rs"
+harness = false
+
+[[bench]]
+name = "sched"
+path = "sched.rs"
+harness = false
