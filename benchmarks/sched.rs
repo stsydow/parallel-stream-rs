@@ -1,26 +1,26 @@
 use tokio::runtime::Runtime;
 use futures::future::{self};
+use executors::crossbeam_channel_pool::ThreadPool;
+use executors::FuturesExecutor;
+use executors::Executor;
+use futures::executor::block_on;
 
 use bencher::{benchmark_group, benchmark_main, Bencher};
 
 const BLOCK_COUNT:usize = 1_000;
-fn wait_task(b: &mut Bencher) {
+fn tokio_run_task(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
 
     b.iter(|| {
-
         let task = future::lazy(|_| () );
-
         runtime.block_on(task);
     });
 }
 
-fn spawn_tokio_1(b: &mut Bencher) {
-    let runtime = Runtime::new().expect("can not start runtime");
-    
+fn futures_run_task(b: &mut Bencher) {
     b.iter(|| {
         let task = future::lazy(|_| () );
-        runtime.block_on(task);
+        block_on(task);
     });
 }
 
@@ -56,10 +56,6 @@ fn spawn_smol(b: &mut Bencher) {
 }
 
 fn spawn_execrs(b: &mut Bencher) {
-    use executors::crossbeam_channel_pool::ThreadPool;
-    use executors::FuturesExecutor;
-    use executors::Executor;
-    use futures::executor::block_on;
     let n_workers = 4;
     let pool = ThreadPool::new(n_workers);
 
@@ -78,11 +74,11 @@ fn spawn_execrs(b: &mut Bencher) {
 }
 
 benchmark_group!(sched, 
+    tokio_run_task,
+    futures_run_task,
     spawn_execrs, 
     spawn_smol,
-    spawn_tokio,
-    spawn_tokio_1,
-    wait_task);
+    spawn_tokio);
 
 benchmark_main!(sched);
 

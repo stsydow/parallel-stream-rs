@@ -275,6 +275,40 @@ fn execrs_channel_buf1_flume(b: &mut Bencher) {
     pool.shutdown().expect("shutdown");
 }
 
+fn execrs_sync_channel_buf1_flume(b: &mut Bencher) {
+    use executors::crossbeam_channel_pool::ThreadPool;
+    use executors::FuturesExecutor;
+    use executors::Executor;
+    use futures::executor::block_on;
+    let n_workers = 4;
+    let pool = ThreadPool::new(n_workers);
+
+    b.iter(|| {
+        let (tx, rx) = flume::bounded::<Message>(1);
+
+        let send_task = move || {dummy_iter()
+            .for_each(|item| 
+                tx.send(item).expect("send error")
+            )
+        };
+
+        let recv_task = || { rx.iter()
+            .for_each(|item| {
+                test_msg(item);
+            })
+        };
+
+        pool.execute(send_task);
+        recv_task();
+        /*
+        let recv = pool.execute(recv_task);
+
+        block_on(recv);
+        */
+    });
+    pool.shutdown().expect("shutdown");
+}
+
 fn channel_buf_big_flume(b: &mut Bencher) {
     let runtime = Runtime::new().expect("can not start runtime");
     b.iter(|| {
@@ -618,6 +652,7 @@ benchmark_group!(
     smol_channel_buf1_flume,
     execrs_channel_buf1,
     execrs_channel_buf1_flume,
+    execrs_sync_channel_buf1_flume,
 );
 
 benchmark_group!(

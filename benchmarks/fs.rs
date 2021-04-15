@@ -1,6 +1,6 @@
-use tokio::runtime::Runtime;
-use futures::FutureExt;
-use futures::StreamExt;
+use tokio::runtime::{self, Runtime};
+use futures::{FutureExt, StreamExt};
+use futures::executor::block_on;
 
 use bencher::{benchmark_group, benchmark_main, Bencher};
 
@@ -8,6 +8,8 @@ const BLOCK_COUNT:usize = 1_000;
 
 const DEV_ZERO: &'static str = "/dev/zero"; 
 const BUFFER_SIZE:usize = 4096; 
+//const BUFFER_SIZE:usize = 256; 
+//const BUFFER_SIZE:usize = 16*4096; 
 
 fn async_read_codec(b: &mut Bencher) {
     use tokio_util::codec::{BytesCodec, FramedRead, /*FramedWrite*/};
